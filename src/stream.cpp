@@ -22,6 +22,7 @@ extern "C" {
 // local includes
 #include "config.h"
 #include "display_device.h"
+#include "display_layout.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -2197,6 +2198,10 @@ namespace stream {
 
         if (revert_display_config) {
           display_device::revert_configuration();
+
+          if (config::sunshine.layout_management_enabled) {
+            display_layout::apply_restore_layout();
+          }
         }
 
         platf::streaming_will_stop();

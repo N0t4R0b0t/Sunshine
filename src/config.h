@@ -346,6 +346,7 @@ namespace config {
     int min_log_level;  ///< Minimum severity level written to the configured log sink.
     std::bitset<flag::FLAG_SIZE> flags;  ///< Runtime flags parsed from command-line options.
     std::string credentials_file;  ///< Path to the stored pairing credentials file.
+    std::string file_layouts;  ///< Path to the saved display layouts file (Linux only, currently).
 
     std::string username;  ///< Username for the local Web UI account.
     std::string password;  ///< Password hash or secret for the local Web UI account.
@@ -374,6 +375,11 @@ namespace config {
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
+
+    // Opt-in: saved display layouts (Linux X11/KWin only) and automatically applying a designated
+    // "restore" layout on startup and client disconnect. Off by default - nothing in the layout
+    // system runs automatically until a user explicitly enables it here.
+    bool layout_management_enabled;  ///< Whether saved display layouts and restore-on-disconnect/startup are enabled.
   };
 
   extern video_t video;

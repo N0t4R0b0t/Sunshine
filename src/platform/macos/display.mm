@@ -298,6 +298,24 @@ namespace platf {
   }
 
   /**
+   * @brief Enumerate the live state of every known display output.
+   *
+   * @return Always empty - saved-layout enumeration/apply is not implemented on macOS.
+   */
+  std::vector<display_output_t> enum_display_outputs() {
+    return {};
+  }
+
+  /**
+   * @brief Apply a desired arrangement of display outputs.
+   *
+   * @return Always `false` - see `enum_display_outputs()`.
+   */
+  bool apply_display_outputs(const std::vector<display_output_t> &) {
+    return false;
+  }
+
+  /**
    * @brief Report whether encoder backends should be probed again before streaming.
    *
    * @return Always `true` because macOS GPU changes are not tracked by this backend.
