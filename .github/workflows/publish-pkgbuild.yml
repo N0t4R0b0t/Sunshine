@@ -57,6 +57,14 @@ jobs:
           echo "Publishing PKGBUILD for tag: ${tag}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
+          # pkgver may not contain colons, forward slashes, hyphens, or whitespace - sanitize the
+          # tag (after stripping a leading 'v') so pre-release tags like v1.2.3-rc1 don't break
+          # makepkg. This only affects the generated pkgver, not the tag/commit pin.
+          pkgver="${tag#v}"
+          pkgver="$(echo "${pkgver}" | tr -c 'A-Za-z0-9._' '_')"
+          echo "Sanitized pkgver: ${pkgver}"
+          echo "pkgver=${pkgver}" >> "${GITHUB_OUTPUT}"
+
       - name: Update keyring
         run: |
           pacman -Syy --disable-download-timeout --needed --noconfirm archlinux-keyring
@@ -89,7 +97,7 @@ jobs:
       - name: Configure PKGBUILD
         env:
           BRANCH: ${{ steps.ref.outputs.tag }}
-          BUILD_VERSION: ${{ steps.ref.outputs.tag }}
+          BUILD_VERSION: ${{ steps.ref.outputs.pkgver }}
           CLONE_URL: ${{ github.event.repository.clone_url }}
           COMMIT: ${{ github.sha }}
         run: |
@@ -110,7 +118,8 @@ jobs:
           chown -R builder:builder pkg
 
           cd pkg
-          sudo -u builder makepkg --printsrcinfo | tee .SRCINFO
+          sudo -u builder makepkg --printsrcinfo > .SRCINFO
+          cat .SRCINFO
 
       - name: Publish to R2
         env:
