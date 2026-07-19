@@ -1,0 +1,137 @@
+---
+name: Publish PKGBUILD
+
+permissions: {}
+
+# Publishes a self-contained, version-pinned PKGBUILD (+ .SRCINFO + .install) to Cloudflare R2
+# whenever a tag is pushed to this fork. The PKGBUILD is not built here - it's the AUR-style
+# source itself, pinned via `_commit`/`pkgver` to the exact tag/commit it was generated from, so
+# an external mirror (e.g. mtune-mirror) can fetch it from a stable URL and build it there.
+#
+# Does not affect the normal CI pipeline (ci.yml and friends) in any way.
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          Tag to publish a PKGBUILD for. Leave blank when re-running a tag-push-triggered run;
+          required when triggering manually.
+        required: false
+        type: string
+
+jobs:
+  publish:
+    name: Publish PKGBUILD to R2
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux/archlinux:base-devel
+    permissions:
+      contents: read
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+    steps:
+      - name: Validate R2 configuration
+        run: |
+          if [ -z "${R2_BUCKET}" ] || [ -z "${R2_ENDPOINT}" ]; then
+            echo "::error::vars.R2_BUCKET and vars.R2_ENDPOINT must be set in this repository's Actions settings (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+
+      - name: Resolve tag
+        id: ref
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          tag="${INPUT_REF}"
+          if [ -z "${tag}" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -z "${tag}" ] || [ "${tag}" == "${GITHUB_REF}" ]; then
+            echo "::error::No tag resolved. Trigger via a tag push, or pass 'ref' explicitly via workflow_dispatch."
+            exit 1
+          fi
+          echo "Publishing PKGBUILD for tag: ${tag}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Update keyring
+        run: |
+          pacman -Syy --disable-download-timeout --needed --noconfirm archlinux-keyring
+          pacman -Syu --disable-download-timeout --noconfirm
+          pacman -Scc --noconfirm
+
+      - name: Install dependencies
+        run: |
+          pacman -Syu --disable-download-timeout --needed --noconfirm \
+            base-devel \
+            cmake \
+            git \
+            aws-cli
+          pacman -Scc --noconfirm
+
+      - name: Setup builder user
+        run: |
+          # arch prevents running makepkg as root
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
+
+      - name: Checkout tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+
+      - name: Fix workspace permissions
+        run: chown -R builder:builder "${GITHUB_WORKSPACE}"
+
+      - name: Configure PKGBUILD
+        env:
+          BRANCH: ${{ steps.ref.outputs.tag }}
+          BUILD_VERSION: ${{ steps.ref.outputs.tag }}
+          CLONE_URL: ${{ github.event.repository.clone_url }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p build
+          cd build
+          cmake \
+            -DSUNSHINE_CONFIGURE_ONLY=ON \
+            -DSUNSHINE_CONFIGURE_PKGBUILD=ON \
+            -DSUNSHINE_SUB_VERSION="" \
+            ..
+          chmod -R a+rX "${GITHUB_WORKSPACE}/build"
+
+      - name: Generate .SRCINFO
+        run: |
+          mkdir -p pkg
+          cp build/PKGBUILD pkg/
+          cp build/sunshine.install pkg/
+          chown -R builder:builder pkg
+
+          cd pkg
+          sudo -u builder makepkg --printsrcinfo | tee .SRCINFO
+
+      - name: Publish to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          aws s3 cp pkg/PKGBUILD "s3://${R2_BUCKET}/aur/${TAG}/PKGBUILD" --endpoint-url "${R2_ENDPOINT}"
+          aws s3 cp pkg/.SRCINFO "s3://${R2_BUCKET}/aur/${TAG}/.SRCINFO" --endpoint-url "${R2_ENDPOINT}"
+          aws s3 cp pkg/sunshine.install "s3://${R2_BUCKET}/aur/${TAG}/sunshine.install" --endpoint-url "${R2_ENDPOINT}"
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          echo "### Published PKGBUILD for \`${TAG}\` :package:" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Destination: \`s3://${R2_BUCKET}/aur/${TAG}/\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Files:" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- PKGBUILD" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- .SRCINFO" >> "${GITHUB_STEP_SUMMARY}"
+          echo "- sunshine.install" >> "${GITHUB_STEP_SUMMARY}"
