@@ -3,6 +3,7 @@
  * @brief Definitions for audio control on Linux.
  */
 // standard includes
+#include <algorithm>
 #include <bitset>
 #include <sstream>
 #include <thread>
@@ -670,7 +671,65 @@ namespace platf {
         }
       }
     };
+
+    /**
+     * @brief Enumerate every PulseAudio sink currently known to the server.
+     *
+     * Connects its own temporary context (does not touch Sunshine's own audio
+     * pipeline or create any null sinks) and disconnects once the query completes.
+     *
+     * @return Audio sinks, or an empty list when PulseAudio can't be reached.
+     */
+    std::vector<platf::audio_sink_t> enum_sinks() {
+      server_t server;
+      if (server.init()) {
+        return {};
+      }
+
+      std::vector<platf::audio_sink_t> sinks;
+      auto alarm = safe::make_alarm<int>();
+
+      cb_t<pa_sink_info *> f = [&](ctx_t::pointer ctx, const pa_sink_info *sink_info, int eol) {
+        if (!sink_info) {
+          if (!eol) {
+            BOOST_LOG(error) << "Couldn't get pulseaudio sink info: "sv << pa_strerror(pa_context_errno(ctx));
+            alarm->ring(-1);
+            return;
+          }
+          alarm->ring(0);
+          return;
+        }
+
+        platf::audio_sink_t sink;
+        sink.id = sink_info->name ? sink_info->name : "";
+        sink.friendly_name = sink_info->description && *sink_info->description ? sink_info->description : sink.id;
+        sinks.emplace_back(std::move(sink));
+      };
+
+      op_t op {pa_context_get_sink_info_list(server.ctx.get(), cb<pa_sink_info *>, &f)};
+      if (!op) {
+        BOOST_LOG(error) << "Couldn't create sink info operation: "sv << pa_strerror(pa_context_errno(server.ctx.get()));
+        return {};
+      }
+
+      alarm->wait();
+      if (*alarm->status()) {
+        return {};
+      }
+
+      std::ranges::sort(sinks, {}, &platf::audio_sink_t::id);
+      return sinks;
+    }
   }  // namespace pa
+
+  /**
+   * @brief Enumerate the audio sinks available on this system.
+   *
+   * @return Audio sinks, or an empty list when PulseAudio is unavailable.
+   */
+  std::vector<audio_sink_t> enum_audio_sinks() {
+    return pa::enum_sinks();
+  }
 
   /**
    * @brief Create the platform audio controller.
