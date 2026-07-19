@@ -532,18 +532,94 @@ namespace platf {
     // Unimplemented
   }
 
+  namespace {
+    GDBusConnection *screensaver_inhibit_conn = nullptr;  ///< Session bus connection holding the active inhibit, or null if not inhibited.
+    guint32 screensaver_inhibit_cookie = 0;  ///< Cookie returned by Inhibit(), required to release it via UnInhibit().
+  }  // namespace
+
   /**
    * @brief Apply Linux platform state before streaming starts.
+   *
+   * Inhibits the desktop's idle screensaver/screen-blank via the freedesktop
+   * ScreenSaver DBus interface (implemented by KDE, GNOME, and others) so that an
+   * idle timeout doesn't blank/lock the display out from under an active stream.
+   *
+   * The inhibition is tied to this DBus connection's lifetime, so if Sunshine
+   * crashes while streaming, the desktop environment notices the connection drop
+   * and releases the inhibition automatically - no separate crash-recovery logic
+   * is needed here, unlike display layout restoration.
    */
   void streaming_will_start() {
-    // Nothing to do
+    if (screensaver_inhibit_conn) {
+      // Already inhibited (e.g. a second session started while the first is still active).
+      return;
+    }
+
+    g_autoptr(GError) err = nullptr;
+    GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &err);
+    if (!conn) {
+      BOOST_LOG(debug) << "Screensaver inhibit: could not connect to session bus: "sv << (err ? err->message : "unknown error"sv);
+      return;
+    }
+
+    g_autoptr(GVariant) result = g_dbus_connection_call_sync(
+      conn,
+      "org.freedesktop.ScreenSaver",
+      "/org/freedesktop/ScreenSaver",
+      "org.freedesktop.ScreenSaver",
+      "Inhibit",
+      g_variant_new("(ss)", "Sunshine", "Actively streaming"),
+      G_VARIANT_TYPE("(u)"),
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &err
+    );
+
+    if (!result) {
+      BOOST_LOG(debug) << "Screensaver inhibit: request failed: "sv << (err ? err->message : "unknown error"sv);
+      g_object_unref(conn);
+      return;
+    }
+
+    g_variant_get(result, "(u)", &screensaver_inhibit_cookie);
+    screensaver_inhibit_conn = conn;  // kept open until streaming_will_stop() releases it
+
+    BOOST_LOG(info) << "Screensaver/idle inhibited while streaming"sv;
   }
 
   /**
    * @brief Restore Linux platform state after streaming stops.
    */
   void streaming_will_stop() {
-    // Nothing to do
+    if (!screensaver_inhibit_conn) {
+      return;
+    }
+
+    g_autoptr(GError) err = nullptr;
+    g_autoptr(GVariant) result = g_dbus_connection_call_sync(
+      screensaver_inhibit_conn,
+      "org.freedesktop.ScreenSaver",
+      "/org/freedesktop/ScreenSaver",
+      "org.freedesktop.ScreenSaver",
+      "UnInhibit",
+      g_variant_new("(u)", screensaver_inhibit_cookie),
+      nullptr,
+      G_DBUS_CALL_FLAGS_NONE,
+      -1,
+      nullptr,
+      &err
+    );
+
+    if (!result) {
+      BOOST_LOG(debug) << "Screensaver uninhibit failed: "sv << (err ? err->message : "unknown error"sv);
+    }
+
+    g_object_unref(screensaver_inhibit_conn);
+    screensaver_inhibit_conn = nullptr;
+    screensaver_inhibit_cookie = 0;
+
+    BOOST_LOG(info) << "Screensaver/idle inhibit released"sv;
   }
 
   /**
