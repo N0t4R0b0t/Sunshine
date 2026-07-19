@@ -107,6 +107,7 @@
   },
   "config": {
     "adapter_name": "Adapter Name",
+    "adapter_name_auto": "Automatic",
     "adapter_name_desc_linux_1": "Manually specify a GPU to use for capture.",
     "adapter_name_desc_linux_2": "to find all devices capable of VAAPI",
     "adapter_name_desc_linux_3": "Replace ``renderD129`` with the device from above to lists the name and capabilities of the device. To be supported by Sunshine, it needs to have at the very minimum:",
@@ -149,6 +150,7 @@
     "amd_vbaq_desc": "The human visual system is typically less sensitive to artifacts in highly textured areas. In VBAQ mode, pixel variance is used to indicate the complexity of spatial textures, allowing the encoder to allocate more bits to smoother areas. Enabling this feature leads to improvements in subjective visual quality with some content.",
     "apply_note": "Click 'Apply' to restart Sunshine and apply changes. This will terminate any running sessions.",
     "audio_sink": "Audio Sink",
+    "audio_sink_auto": "Automatic (default sink)",
     "audio_sink_desc_linux": "The name of the audio sink used for Audio Loopback. If you do not specify this variable, pulseaudio will select the default monitor device. You can find the name of the audio sink using either command:",
     "audio_sink_desc_macos": "The name of the audio sink used for Audio Loopback. Leave this blank to use the built-in system audio capture. Alternatively, specify a virtual device such as Soundflower or BlackHole if you prefer.",
     "audio_sink_desc_windows": "Manually specify a specific audio device to capture. If unset, the device is chosen automatically. We strongly recommend leaving this field blank to use automatic device selection! If you have multiple audio devices with identical names, you can get the Device ID using the following command:",
