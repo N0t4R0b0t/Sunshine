@@ -2,17 +2,26 @@
 name: Archive to R2
 permissions: {}
 
-# Manual-only: pulls the artifacts from an already-completed CI run and copies them into
-# Cloudflare R2, so build outputs can be kept without relying on GitHub Actions artifact
-# storage. Does not affect the normal CI pipeline (ci.yml and friends) in any way.
+# Pulls the artifacts from a completed CI run and copies them into Cloudflare R2, so build
+# outputs can be kept without relying on GitHub Actions artifact storage. Does not affect
+# the normal CI pipeline (ci.yml and friends) in any way.
+#
+# Two ways to run this:
+#   - workflow_dispatch with an explicit run_id: archives that specific run.
+#   - push to this branch (e.g. while iterating on this workflow): auto-archives the
+#     latest successful ci.yml run, whatever that happens to be at the time.
 on:
+  push:
+    branches:
+      - ci/r2-artifact-archive
   workflow_dispatch:
     inputs:
       run_id:
         description: >-
           The CI run whose artifacts should be archived. Copy this from the run's URL:
-          github.com/<owner>/<repo>/actions/runs/<run_id>
-        required: true
+          github.com/<owner>/<repo>/actions/runs/<run_id>. Leave blank to auto-resolve
+          the latest successful ci.yml run.
+        required: false
         type: string
       artifact_pattern:
         description: >-
@@ -25,7 +34,7 @@ on:
 
 jobs:
   archive:
-    name: Archive run ${{ inputs.run_id }}
+    name: Archive to R2
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -40,12 +49,38 @@ jobs:
             exit 1
           fi
 
-      - name: Download artifacts from run ${{ inputs.run_id }}
+      - name: Resolve run to archive
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+          INPUT_PATTERN: ${{ inputs.artifact_pattern }}
+        run: |
+          run_id="${INPUT_RUN_ID}"
+          if [ -z "${run_id}" ]; then
+            echo "No run_id given - resolving the latest successful ci.yml run instead."
+            run_id=$(gh run list --repo "${{ github.repository }}" --workflow=ci.yml --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
+            if [ -z "${run_id}" ] || [ "${run_id}" == "null" ]; then
+              echo "::error::No successful ci.yml run found to archive. Trigger ci.yml first, or pass run_id explicitly via workflow_dispatch."
+              exit 1
+            fi
+            echo "Auto-resolved latest successful ci.yml run: ${run_id}"
+          fi
+
+          pattern="${INPUT_PATTERN}"
+          if [ -z "${pattern}" ]; then
+            pattern="*"
+          fi
+
+          echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
+          echo "pattern=${pattern}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download artifacts from run ${{ steps.resolve.outputs.run_id }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          run-id: ${{ inputs.run_id }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ github.token }}
-          pattern: ${{ inputs.artifact_pattern }}
+          pattern: ${{ steps.resolve.outputs.pattern }}
           path: artifacts
           merge-multiple: false
 
@@ -57,17 +92,20 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
         run: |
-          aws s3 cp --recursive artifacts/ "s3://${R2_BUCKET}/runs/${{ inputs.run_id }}/" \
+          aws s3 cp --recursive artifacts/ "s3://${R2_BUCKET}/runs/${RUN_ID}/" \
             --endpoint-url "${R2_ENDPOINT}"
 
       - name: Summary
+        env:
+          RUN_ID: ${{ steps.resolve.outputs.run_id }}
         run: |
           echo "### Archived to R2 :package:" >> "${GITHUB_STEP_SUMMARY}"
           echo "" >> "${GITHUB_STEP_SUMMARY}"
-          echo "Source run: [${{ inputs.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ inputs.run_id }})" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Source run: [${RUN_ID}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${RUN_ID})" >> "${GITHUB_STEP_SUMMARY}"
           echo "" >> "${GITHUB_STEP_SUMMARY}"
-          echo "Destination: \`s3://${R2_BUCKET}/runs/${{ inputs.run_id }}/\`" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Destination: \`s3://${R2_BUCKET}/runs/${RUN_ID}/\`" >> "${GITHUB_STEP_SUMMARY}"
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "Files:" >> "${GITHUB_STEP_SUMMARY}"
           find artifacts -type f -printf '- `%P`\n' | sort >> "${GITHUB_STEP_SUMMARY}"
