@@ -5,6 +5,7 @@
 : "${_run_unit_tests:=false}"  # if set to true; unit tests will be executed post build; useful in CI
 : "${_support_headless_testing:=false}"
 : "${_use_cuda:=detect}" # nvenc
+: "${_build_jobs:=4}"  # cap on parallel compile/link jobs; override via MAKEFLAGS or this var on constrained builders
 
 : "${_commit:=@GITHUB_COMMIT@}"
 
@@ -133,7 +134,7 @@ build() {
     export CFLAGS="${CFLAGS/-Werror=format-security/}"
     export CXXFLAGS="${CXXFLAGS/-Werror=format-security/}"
 
-    export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
+    export MAKEFLAGS="${MAKEFLAGS:--j${_build_jobs}}"
 
     local _cmake_options=(
       -S "$pkgname"
@@ -243,6 +244,6 @@ check() {
 }
 
 package() {
-    export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
+    export MAKEFLAGS="${MAKEFLAGS:--j${_build_jobs}}"
     DESTDIR="$pkgdir" cmake --install build
 }
