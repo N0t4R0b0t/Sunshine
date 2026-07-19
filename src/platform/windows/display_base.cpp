@@ -1118,6 +1118,26 @@ namespace platf {
   }
 
   /**
+   * @brief Enumerate the live state of every known display output.
+   *
+   * @return Always empty - saved-layout enumeration/apply is only implemented on Linux (X11/KWin)
+   *         so far. Windows already has its own, more capable display device system (see
+   *         src/display_device.cpp / libdisplaydevice).
+   */
+  std::vector<display_output_t> enum_display_outputs() {
+    return {};
+  }
+
+  /**
+   * @brief Apply a desired arrangement of display outputs.
+   *
+   * @return Always `false` - see `enum_display_outputs()`.
+   */
+  bool apply_display_outputs(const std::vector<display_output_t> &) {
+    return false;
+  }
+
+  /**
    * @brief Check whether DXGI reports that adapter or driver enumeration is stale.
    *
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.

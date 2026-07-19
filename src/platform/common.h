@@ -901,6 +901,38 @@ namespace platf {
   std::vector<std::string> display_names(mem_type_e hwdevice_type);
 
   /**
+   * @brief Describes the live state of a single display output/connector.
+   */
+  struct display_output_t {
+    std::string id;  ///< Stable output/connector identifier, e.g. "HDMI-1" or an index string.
+    std::string friendly_name;  ///< Human-readable name for display in the UI.
+    bool connected = false;  ///< Whether a display is physically connected to this output.
+    bool enabled = false;  ///< Whether the output currently has an active mode/CRTC.
+    bool primary = false;  ///< Whether this is the primary output.
+    int x = 0;  ///< X position within the virtual screen.
+    int y = 0;  ///< Y position within the virtual screen.
+    int width = 0;  ///< Width of the current mode, in pixels.
+    int height = 0;  ///< Height of the current mode, in pixels.
+    double refresh_rate = 0.0;  ///< Refresh rate of the current mode, in Hz.
+    int rotation = 0;  ///< Clockwise rotation in degrees (0, 90, 180, or 270).
+  };
+
+  /**
+   * @brief Enumerate the live state (geometry, connection, primary) of every known display output.
+   * Only supported on backends that expose synchronous output layout queries (currently X11 on Linux).
+   * @return Display outputs, or an empty list when unsupported by the active capture backend.
+   */
+  std::vector<display_output_t> enum_display_outputs();
+
+  /**
+   * @brief Apply a desired arrangement of display outputs to the display server.
+   * Only supported on backends that expose synchronous output layout changes (currently X11 on Linux).
+   * @param desired The desired output states, typically from a saved layout.
+   * @return `true` if the arrangement was applied successfully, `false` if unsupported or on failure.
+   */
+  bool apply_display_outputs(const std::vector<display_output_t> &desired);
+
+  /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
