@@ -34,6 +34,7 @@
 // local includes
 #include "confighttp.h"
 #include "display_device.h"
+#include "display_layout.h"
 #include "entry_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -441,6 +442,10 @@ int main(int argc, char *argv[]) {
   auto platf_deinit_guard = platf::init();
   if (!platf_deinit_guard) {
     BOOST_LOG(error) << "Platform failed to initialize"sv;
+  } else if (config::sunshine.layout_management_enabled) {
+    // Self-heals a display layout that survived a crash/reboot without a graceful client
+    // disconnect (e.g. a dummy-only capture arrangement with no real monitor to fix it from).
+    display_layout::apply_restore_layout();
   }
 
   // Capture the pre-request state so access granted during this launch causes
