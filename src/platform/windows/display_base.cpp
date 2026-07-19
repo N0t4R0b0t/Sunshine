@@ -1138,6 +1138,24 @@ namespace platf {
   }
 
   /**
+   * @brief Enumerate the render adapters available on this system.
+   *
+   * @return Always empty - live adapter enumeration is only implemented on Linux so far.
+   */
+  std::vector<render_adapter_t> enum_render_adapters() {
+    return {};
+  }
+
+  /**
+   * @brief Enumerate the audio sinks available on this system.
+   *
+   * @return Always empty - live audio sink enumeration is only implemented on Linux so far.
+   */
+  std::vector<audio_sink_t> enum_audio_sinks() {
+    return {};
+  }
+
+  /**
    * @brief Check whether DXGI reports that adapter or driver enumeration is stale.
    *
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.

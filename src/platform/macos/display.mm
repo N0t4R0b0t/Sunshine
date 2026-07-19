@@ -316,6 +316,24 @@ namespace platf {
   }
 
   /**
+   * @brief Enumerate the render adapters available on this system.
+   *
+   * @return Always empty - live adapter enumeration is not implemented on macOS.
+   */
+  std::vector<render_adapter_t> enum_render_adapters() {
+    return {};
+  }
+
+  /**
+   * @brief Enumerate the audio sinks available on this system.
+   *
+   * @return Always empty - live audio sink enumeration is not implemented on macOS.
+   */
+  std::vector<audio_sink_t> enum_audio_sinks() {
+    return {};
+  }
+
+  /**
    * @brief Report whether encoder backends should be probed again before streaming.
    *
    * @return Always `true` because macOS GPU changes are not tracked by this backend.
