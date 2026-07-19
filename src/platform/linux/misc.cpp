@@ -1177,6 +1177,8 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_X11
   std::vector<std::string> x11_display_names();
   std::shared_ptr<display_t> x11_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
+  std::vector<platf::display_output_t> x11_enum_outputs();
+  bool x11_apply_outputs(const std::vector<platf::display_output_t> &desired);
 
   bool verify_x11() {
     return window_system == window_system_e::X11 && !x11_display_names().empty();
@@ -1196,6 +1198,8 @@ namespace platf {
   bool kwin_available();
   std::vector<std::string> kwin_display_names();
   std::shared_ptr<display_t> kwin_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
+  std::vector<platf::display_output_t> kwin_enum_outputs();
+  bool kwin_apply_outputs(const std::vector<platf::display_output_t> &desired);
 
   bool verify_kwin() {
     // Note: The separate kwin_available check is necessary because with CAP_SYS_ADMIN kwin_display_names is never empty during startup
@@ -1239,6 +1243,45 @@ namespace platf {
     }
 #endif
     return {};
+  }
+
+  /**
+   * @brief Enumerate the live state of every known display output.
+   * Currently only supported when the active capture backend is X11.
+   */
+  std::vector<platf::display_output_t> enum_display_outputs() {
+#ifdef SUNSHINE_BUILD_X11
+    if (sources[source::X11]) {
+      return x11_enum_outputs();
+    }
+#endif
+#ifdef SUNSHINE_BUILD_KWIN
+    // Layout management only needs KWin's Wayland protocols to be reachable - it's independent
+    // of which backend (portal, kwin, ...) was actually selected to capture/stream video.
+    if (window_system == window_system_e::WAYLAND && kwin_available()) {
+      return kwin_enum_outputs();
+    }
+#endif
+    return {};
+  }
+
+  /**
+   * @brief Apply a desired arrangement of display outputs to the display server.
+   * Currently only supported when the active capture backend is X11.
+   */
+  bool apply_display_outputs(const std::vector<platf::display_output_t> &desired) {
+#ifdef SUNSHINE_BUILD_X11
+    if (sources[source::X11]) {
+      return x11_apply_outputs(desired);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_KWIN
+    if (window_system == window_system_e::WAYLAND && kwin_available()) {
+      return kwin_apply_outputs(desired);
+    }
+#endif
+    BOOST_LOG(warning) << "Applying a display layout is only supported on the X11 and KWin capture backends"sv;
+    return false;
   }
 
   /**

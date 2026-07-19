@@ -50,6 +50,7 @@ constexpr auto CA_DIR = "credentials";  ///< Subdirectory under app data that st
 const std::string PRIVATE_KEY_FILE = std::string(CA_DIR) + "/cakey.pem";  ///< Relative path to the persisted private key PEM file.
 const std::string CERTIFICATE_FILE = std::string(CA_DIR) + "/cacert.pem";  ///< Relative path to the persisted certificate PEM file.
 const std::string APPS_JSON_PATH = platf::appdata().string() + "/apps.json";  ///< Default path to the applications JSON file.
+const std::string LAYOUTS_JSON_PATH = platf::appdata().string() + "/layouts.json";  ///< Default path to the saved display layouts JSON file.
 
 namespace config {
 
@@ -868,6 +869,7 @@ namespace config {
     2,  // min_log_level
     0,  // flags
     {},  // User file
+    {},  // Layouts file
     {},  // Username
     {},  // Password
     {},  // Password Salt
@@ -1696,6 +1698,12 @@ namespace config {
     // Must be run after "file_state"
     config::sunshine.credentials_file = config::nvhttp.file_state;
     path_f(vars, "credentials_file", config::sunshine.credentials_file);
+
+    config::sunshine.file_layouts = LAYOUTS_JSON_PATH;
+    path_f(vars, "file_layouts", config::sunshine.file_layouts);
+
+    sunshine.layout_management_enabled = false;
+    bool_f(vars, "layout_management_enabled", config::sunshine.layout_management_enabled);
 
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
