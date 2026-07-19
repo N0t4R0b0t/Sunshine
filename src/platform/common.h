@@ -901,6 +901,34 @@ namespace platf {
   std::vector<std::string> display_names(mem_type_e hwdevice_type);
 
   /**
+   * @brief Describes a single GPU render adapter/device available for capture/encode.
+   */
+  struct render_adapter_t {
+    std::string id;  ///< Device path, e.g. "/dev/dri/renderD128".
+    std::string friendly_name;  ///< Human-readable label for display in the UI, e.g. the driver name.
+  };
+
+  /**
+   * @brief Enumerate the render adapters available on this system.
+   * @return Render adapters, or an empty list when unsupported on this platform.
+   */
+  std::vector<render_adapter_t> enum_render_adapters();
+
+  /**
+   * @brief Describes a single audio sink available for capture.
+   */
+  struct audio_sink_t {
+    std::string id;  ///< Sink name, as accepted by `audio_sink` config.
+    std::string friendly_name;  ///< Human-readable label for display in the UI.
+  };
+
+  /**
+   * @brief Enumerate the audio sinks available on this system.
+   * @return Audio sinks, or an empty list when unsupported on this platform.
+   */
+  std::vector<audio_sink_t> enum_audio_sinks();
+
+  /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */

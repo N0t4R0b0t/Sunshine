@@ -13,6 +13,7 @@
 #endif
 
 // standard includes
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
@@ -1462,6 +1463,52 @@ namespace platf {
     }
     auto detected = find_render_node_with_display();
     return detected.empty() ? "/dev/dri/renderD128" : detected;
+  }
+
+  /**
+   * @brief Enumerate the DRM render nodes available on this system.
+   *
+   * @return Render adapters, or an empty list when DRM support isn't built in or no
+   *         render nodes are found.
+   */
+  std::vector<platf::render_adapter_t> enum_render_adapters() {
+    std::vector<platf::render_adapter_t> adapters;
+#ifdef SUNSHINE_BUILD_DRM
+    auto *dir = opendir("/dev/dri");
+    if (!dir) {
+      return adapters;
+    }
+
+    while (auto *entry = readdir(dir)) {
+      if (strncmp(entry->d_name, "renderD", 7) != 0) {
+        continue;
+      }
+
+      std::string path = std::string("/dev/dri/") + entry->d_name;
+      int fd = open(path.c_str(), O_RDWR);
+      if (fd < 0) {
+        continue;
+      }
+
+      platf::render_adapter_t adapter;
+      adapter.id = path;
+      adapter.friendly_name = entry->d_name;
+
+      if (auto *version = drmGetVersion(fd)) {
+        if (version->name && version->name_len > 0) {
+          adapter.friendly_name = std::string(version->name, version->name_len) + " (" + entry->d_name + ")";
+        }
+        drmFreeVersion(version);
+      }
+
+      close(fd);
+      adapters.emplace_back(std::move(adapter));
+    }
+    closedir(dir);
+
+    std::ranges::sort(adapters, {}, &platf::render_adapter_t::id);
+#endif
+    return adapters;
   }
 
 #if !defined(__FreeBSD__)

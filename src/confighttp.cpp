@@ -846,6 +846,64 @@ namespace confighttp {
   }
 
   /**
+   * @brief Get the live list of GPU render adapters available for capture/encode.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/adapters| GET| null}
+   */
+  void getAdapters(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    auto adapters = platf::enum_render_adapters();
+
+    nlohmann::json output_tree;
+    output_tree["supported"] = !adapters.empty();
+    output_tree["adapters"] = nlohmann::json::array();
+    for (const auto &adapter : adapters) {
+      nlohmann::json j;
+      j["id"] = adapter.id;
+      j["friendly_name"] = adapter.friendly_name;
+      output_tree["adapters"].push_back(j);
+    }
+
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Get the live list of audio sinks available for capture.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/audio-sinks| GET| null}
+   */
+  void getAudioSinks(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    auto sinks = platf::enum_audio_sinks();
+
+    nlohmann::json output_tree;
+    output_tree["supported"] = !sinks.empty();
+    output_tree["sinks"] = nlohmann::json::array();
+    for (const auto &sink : sinks) {
+      nlohmann::json j;
+      j["id"] = sink.id;
+      j["friendly_name"] = sink.friendly_name;
+      output_tree["sinks"].push_back(j);
+    }
+
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Get the list of paired clients.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -1797,6 +1855,8 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
+    server.resource["^/api/adapters$"]["GET"] = getAdapters;
+    server.resource["^/api/audio-sinks$"]["GET"] = getAudioSinks;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
