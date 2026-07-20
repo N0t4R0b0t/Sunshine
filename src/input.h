@@ -47,23 +47,6 @@ namespace input {
   bool probe_gamepads();
 
   /**
-   * @brief Recreate the global virtual mouse/keyboard device.
-   *
-   * The virtual input device is otherwise created once, at Sunshine startup, and reused for the
-   * process's entire lifetime. On Linux, the compositor's input stack (libinput/KWin) can
-   * calibrate an absolute pointer device's coordinate mapping when it's first discovered and
-   * never revisit that decision afterward - so a display layout change that alters the desktop's
-   * effective size (e.g. switching to a single dummy display) can leave mouse input silently
-   * confined to whatever region was mapped when the device first appeared, even though the
-   * scaling values Sunshine computes and sends are already correct for the new layout. Tearing
-   * down and recreating the device gives the compositor a fresh device to recalibrate against.
-   *
-   * Only safe to call when no session is actively using the input device (mirrors how layout
-   * changes are already gated on there being no active streaming sessions).
-   */
-  void refresh();
-
-  /**
    * @brief Allocate and initialize platform input state for a stream.
    *
    * @param mail Mailbox used to exchange messages with worker threads.
