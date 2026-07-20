@@ -297,7 +297,7 @@ onMounted(async () => {
       default="false"
     ></Checkbox>
 
-    <div v-if="config.layout_management_enabled" class="mt-3">
+    <div v-if="config.layout_management_enabled === 'enabled'" class="mt-3">
       <label class="form-label">{{ $t('config.display_layouts') }}</label>
       <div class="form-text">{{ $t('config.display_layouts_desc') }}</div>
 

@@ -1119,7 +1119,14 @@ namespace confighttp {
         return;
       }
 
-      output_tree["status"] = platf::apply_display_outputs(it->outputs);
+      bool applied = platf::apply_display_outputs(it->outputs);
+      output_tree["status"] = applied;
+      if (applied) {
+        // The active capture pipeline (if a stream is running) caches display geometry at
+        // startup and won't notice this change on its own - force it to reinitialize so
+        // absolute mouse coordinates stay in sync with the new layout.
+        mail::man->event<bool>(mail::refresh_display)->raise(true);
+      }
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "ApplyDisplayLayout: "sv << e.what();
@@ -1168,7 +1175,13 @@ namespace confighttp {
       }
 
       nlohmann::json output_tree;
-      output_tree["status"] = platf::apply_display_outputs(outputs);
+      bool applied = platf::apply_display_outputs(outputs);
+      output_tree["status"] = applied;
+      if (applied) {
+        // See the matching comment in applyDisplayLayout() - keeps an active stream's mouse
+        // coordinate mapping in sync with the newly-applied arrangement.
+        mail::man->event<bool>(mail::refresh_display)->raise(true);
+      }
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "ApplyDisplayOutputs: "sv << e.what();
