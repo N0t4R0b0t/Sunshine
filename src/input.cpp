@@ -1877,6 +1877,16 @@ namespace input {
   }
 
   /**
+   * @brief Recreate the global virtual mouse/keyboard device.
+   */
+  void refresh() {
+    // Explicitly release the old device before constructing the new one, rather than relying on
+    // assignment's implicit ordering, so there's never a moment where both exist at once.
+    platf_input.reset();
+    platf_input = platf::input();
+  }
+
+  /**
    * @brief Probe connected gamepads and update input capability state.
    */
   bool probe_gamepads() {
