@@ -1265,6 +1265,40 @@ namespace platf {
     if (management.init() < 0) {
       return false;
     }
-    return management.apply(desired);
+    if (!management.apply(desired)) {
+      return false;
+    }
+
+    // kde_output_management_v2's "applied" event (already awaited inside apply()) only confirms
+    // KWin's own compositor-side output state changed. The separate generic wl_output/xdg-output
+    // registry - which verify_and_update_display_parameters() uses to compute the env_width/
+    // env_height bounding box for absolute mouse mapping - can lag behind by a beat. If a client
+    // connects immediately after this call (e.g. via the streaming layout) and capture init reads
+    // that registry before it has caught up, the mouse ends up confined to a stale, oversized
+    // virtual desktop. Poll briefly until the enabled outputs we just requested actually show up
+    // there before returning, so a fresh capture init sees consistent state.
+    auto deadline = std::chrono::steady_clock::now() + 1s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      auto monitors = wl::monitors();
+
+      bool converged = true;
+      for (const auto &output : desired) {
+        bool present = std::ranges::any_of(monitors, [&](const auto &monitor) {
+          return monitor->name == output.id;
+        });
+        if (present != output.enabled) {
+          converged = false;
+          break;
+        }
+      }
+
+      if (converged) {
+        break;
+      }
+
+      std::this_thread::sleep_for(50ms);
+    }
+
+    return true;
   }
 }  // namespace platf
