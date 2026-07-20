@@ -1070,7 +1070,9 @@ namespace nvhttp {
           }
         }
         if (!output_id.empty()) {
-          platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
+          if (!platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps))) {
+            BOOST_LOG(warning) << "Failed to match client's requested resolution "sv << launch_session->width << 'x' << launch_session->height << " - streaming at the display's current resolution instead"sv;
+          }
         }
       }
 
@@ -1209,7 +1211,9 @@ namespace nvhttp {
           }
         }
         if (!output_id.empty()) {
-          platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
+          if (!platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps))) {
+            BOOST_LOG(warning) << "Failed to match client's requested resolution "sv << launch_session->width << 'x' << launch_session->height << " - streaming at the display's current resolution instead"sv;
+          }
         }
       }
 

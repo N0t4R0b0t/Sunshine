@@ -987,6 +987,15 @@ namespace kwin {
         return false;
       }
 
+      // Remember the device's current mode so we can explicitly restore it if the compositor
+      // rejects our requested mode. Left alone, a rejected modeset can take the compositor
+      // several seconds to settle back to a valid state on its own, during which KMS capture
+      // can't find the monitor at all - explicitly reselecting the previous mode avoids that.
+      const auto &current_state = devices[target_device];
+      const int previous_width = current_state.width;
+      const int previous_height = current_state.height;
+      const int previous_refresh_mhz = current_state.refresh_mhz;
+
       const auto refresh_mhz = static_cast<int32_t>(std::llround(refresh_rate * 1000.0));
 
       // Already available? No need to synthesize a custom mode at all.
@@ -1028,7 +1037,22 @@ namespace kwin {
       }
       kde_output_configuration_v2_mode(kde_output_configuration, target_device, target_mode);
       kde_output_configuration_v2_apply(kde_output_configuration);
-      return wait_for_apply();
+      if (wait_for_apply()) {
+        return true;
+      }
+
+      // The compositor/driver rejected the mode (e.g. NVIDIA rejecting a synthesized custom
+      // mode). Explicitly reselect whatever was active before, instead of leaving the output
+      // in whatever state the failed apply left it in.
+      BOOST_LOG(warning) << "[kwingrab] mode "sv << width << 'x' << height << '@' << refresh_rate
+                          << " was rejected, restoring previous mode "sv << previous_width << 'x' << previous_height;
+      struct kde_output_device_mode_v2 *previous_mode = find_mode(previous_width, previous_height, previous_refresh_mhz);
+      if (previous_mode && begin_configuration()) {
+        kde_output_configuration_v2_mode(kde_output_configuration, target_device, previous_mode);
+        kde_output_configuration_v2_apply(kde_output_configuration);
+        wait_for_apply();
+      }
+      return false;
     }
 
   private:
