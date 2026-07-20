@@ -5,6 +5,7 @@
 // standard includes
 #include <algorithm>
 #include <fstream>
+#include <limits>
 #include <thread>
 
 // plaform includes
@@ -1144,6 +1145,29 @@ namespace platf {
       return false;
     }
 
+    // A saved layout's positions reflect wherever those outputs happened to sit when it was
+    // captured - e.g. a dummy that used to sit alongside other monitors keeps that offset in the
+    // saved layout even if this application only re-enables the dummy alone. Applying that
+    // position verbatim would leave X11's own screen geometry genuinely anchored away from
+    // (0,0), which no amount of capture-side coordinate math can compensate for since it's X11's
+    // own cursor/pointer boundary that ends up wrong, not just what Sunshine computes. Normalize
+    // so the enabled outputs' bounding box always starts at (0,0).
+    int min_x = std::numeric_limits<int>::max();
+    int min_y = std::numeric_limits<int>::max();
+    for (const auto &output : desired) {
+      if (!output.enabled) {
+        continue;
+      }
+      min_x = std::min(min_x, output.x);
+      min_y = std::min(min_y, output.y);
+    }
+    if (min_x == std::numeric_limits<int>::max()) {
+      min_x = 0;
+    }
+    if (min_y == std::numeric_limits<int>::max()) {
+      min_y = 0;
+    }
+
     // Grow the virtual screen to fit the desired bounding box before repositioning any CRTC,
     // since XRRSetCrtcConfig fails if a CRTC would be placed outside the current screen size.
     int max_x = 0;
@@ -1152,8 +1176,8 @@ namespace platf {
       if (!output.enabled) {
         continue;
       }
-      max_x = std::max(max_x, output.x + output.width);
-      max_y = std::max(max_y, output.y + output.height);
+      max_x = std::max(max_x, (output.x - min_x) + output.width);
+      max_y = std::max(max_y, (output.y - min_y) + output.height);
     }
     if (max_x > 0 && max_y > 0) {
       x11::rr::SetScreenSize(xdisplay.get(), xwindow, max_x, max_y, 0, 0);
@@ -1191,8 +1215,10 @@ namespace platf {
       }
 
       Rotation desired_rotation = x11_degrees_to_rotation(it->rotation, crt_info->rotation);
+      int target_x = it->x - min_x;
+      int target_y = it->y - min_y;
 
-      if (crt_info->x == it->x && crt_info->y == it->y && (int) crt_info->width == it->width &&
+      if (crt_info->x == target_x && crt_info->y == target_y && (int) crt_info->width == it->width &&
           (int) crt_info->height == it->height && crt_info->rotation == desired_rotation) {
         // No change needed for this output.
         continue;
@@ -1203,8 +1229,8 @@ namespace platf {
         screenr.get(),
         out_info->crtc,
         CurrentTime,
-        it->x,
-        it->y,
+        target_x,
+        target_y,
         crt_info->mode,
         desired_rotation,
         crt_info->outputs,
