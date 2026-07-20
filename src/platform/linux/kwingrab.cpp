@@ -959,20 +959,19 @@ namespace kwin {
     }
 
     /**
-     * @brief Set a bound device to a specific resolution/refresh rate, synthesizing a custom mode
-     * via kde_mode_list_v2 if no matching mode is already advertised by the device.
+     * @brief Set a bound device to a resolution/refresh rate already advertised by that device.
      *
-     * Two round trips are required: the first asks the compositor to generate the custom mode and
-     * add it to the device (kde_output_configuration_v2.set_custom_modes), which - per protocol -
-     * causes it to show up through the same kde_output_device_v2.mode event used for EDID modes.
-     * Only once that's observed can it be selected via kde_output_configuration_v2.mode, the same
-     * request used for any other mode.
+     * Synthesizing genuinely new modes via kde_mode_list_v2 was tried and removed - KWin accepts
+     * the request, but the underlying NVIDIA DRM-KMS driver rejects the atomic modeset test for
+     * anything outside the display's own EDID mode list (confirmed via direct protocol testing:
+     * kwin_wayland logs "Atomic modeset test failed! Invalid argument" for the synthesized mode).
+     * That's a driver limitation below both KWin and Sunshine - only EDID-advertised modes work.
      *
      * @param output_id Device name (== id) to change.
      * @param width Desired width, in pixels.
      * @param height Desired height, in pixels.
      * @param refresh_rate Desired refresh rate, in Hz.
-     * @return True if the mode was created and selected successfully.
+     * @return True if a matching mode was found and selected successfully.
      */
     bool apply_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
       struct kde_output_device_v2 *target_device = nullptr;
@@ -998,41 +997,18 @@ namespace kwin {
 
       const auto refresh_mhz = static_cast<int32_t>(std::llround(refresh_rate * 1000.0));
 
-      // Already available? No need to synthesize a custom mode at all.
       struct kde_output_device_mode_v2 *target_mode = find_mode(width, height, refresh_mhz);
-
       if (!target_mode) {
-        auto *mode_list = kde_output_management_v2_create_mode_list(kde_output_management);
-        kde_mode_list_v2_set_resolution(mode_list, width, height);
-        kde_mode_list_v2_set_refresh_rate(mode_list, refresh_mhz);
-        kde_mode_list_v2_set_reduced_blanking(mode_list, 0);
-        // Setting properties alone doesn't add anything to the list - add_mode is what actually
-        // commits the currently-set properties as a candidate mode (kde-output-management-v2.xml).
-        kde_mode_list_v2_add_mode(mode_list);
-
-        if (!begin_configuration()) {
-          kde_mode_list_v2_destroy(mode_list);
-          return false;
+        target_mode = find_closest_mode(width, height, refresh_mhz);
+        if (target_mode) {
+          const auto &chosen = modes[target_mode];
+          BOOST_LOG(info) << "[kwingrab] no exact mode for "sv << width << 'x' << height << '@' << refresh_rate
+                           << ", using closest match "sv << chosen.width << 'x' << chosen.height << '@' << (chosen.refresh_mhz / 1000.0);
         }
-        kde_output_configuration_v2_set_custom_modes(kde_output_configuration, target_device, mode_list);
-        kde_output_configuration_v2_apply(kde_output_configuration);
-        bool ok = wait_for_apply();
-        kde_mode_list_v2_destroy(mode_list);
-        if (!ok) {
-          BOOST_LOG(warning) << "[kwingrab] compositor rejected custom mode "sv << width << 'x' << height << '@' << refresh_rate;
-          return false;
-        }
-
-        // Give the compositor a chance to advertise the newly generated mode via the normal
-        // kde_output_device_v2.mode event before looking for it.
-        wl_display_roundtrip(wl_display);
-        wl_display_roundtrip(wl_display);
-
-        target_mode = find_mode(width, height, refresh_mhz);
-        if (!target_mode) {
-          BOOST_LOG(warning) << "[kwingrab] custom mode "sv << width << 'x' << height << '@' << refresh_rate << " was not advertised after set_custom_modes"sv;
-          return false;
-        }
+      }
+      if (!target_mode) {
+        BOOST_LOG(warning) << "[kwingrab] no advertised mode matches "sv << width << 'x' << height << '@' << refresh_rate;
+        return false;
       }
 
       if (!begin_configuration()) {
@@ -1044,9 +1020,8 @@ namespace kwin {
         return true;
       }
 
-      // The compositor/driver rejected the mode (e.g. NVIDIA rejecting a synthesized custom
-      // mode). Explicitly reselect whatever was active before, instead of leaving the output
-      // in whatever state the failed apply left it in.
+      // The compositor/driver rejected the mode. Explicitly reselect whatever was active before,
+      // instead of leaving the output in whatever state the failed apply left it in.
       BOOST_LOG(warning) << "[kwingrab] mode "sv << width << 'x' << height << '@' << refresh_rate
                           << " was rejected, restoring previous mode "sv << previous_width << 'x' << previous_height;
       struct kde_output_device_mode_v2 *previous_mode = find_mode(previous_width, previous_height, previous_refresh_mhz);
@@ -1069,6 +1044,61 @@ namespace kwin {
         }
       }
       return nullptr;
+    }
+
+    /**
+     * @brief Find the best available substitute for a resolution with no exact advertised match.
+     *
+     * Ranks candidates by aspect-ratio closeness first (so a 1024x600 request prefers a 16:9 mode
+     * over an equally-sized 4:3 one), then by smallest area among equally-close aspect ratios (so
+     * it doesn't jump straight to 4K when a smaller mode fits just as well - e.g. 1024x600 lands on
+     * 1280x720 rather than 2560x1440, both being 16:9). Modes at least as large as the request in
+     * both dimensions are always preferred over smaller ones, since cropping is only possible when
+     * the physical mode is at least the requested size. Refresh rate is the final tiebreaker.
+     */
+    struct kde_output_device_mode_v2 *find_closest_mode(int width, int height, int32_t refresh_mhz) {
+      const double target_ar = static_cast<double>(width) / height;
+
+      struct kde_output_device_mode_v2 *best = nullptr;
+      bool best_fits = false;
+      double best_ar_diff = std::numeric_limits<double>::max();
+      long long best_area = std::numeric_limits<long long>::max();
+      int32_t best_refresh_diff = std::numeric_limits<int32_t>::max();
+
+      for (auto &[mode, state] : modes) {
+        if (state.width <= 0 || state.height <= 0) {
+          continue;
+        }
+        const bool fits = state.width >= width && state.height >= height;
+        const double ar_diff = std::abs(static_cast<double>(state.width) / state.height - target_ar);
+        const long long area = static_cast<long long>(state.width) * state.height;
+        const int32_t refresh_diff = std::abs(state.refresh_mhz - refresh_mhz);
+
+        // A mode that fits always beats one that doesn't, regardless of aspect ratio/size.
+        if (fits != best_fits) {
+          if (!fits) {
+            continue;
+          }
+        } else if (std::abs(ar_diff - best_ar_diff) > 1e-6) {
+          if (ar_diff > best_ar_diff) {
+            continue;
+          }
+        } else if (fits ? area > best_area : area < best_area) {
+          // Among equally-close aspect ratios: prefer the smallest fitting mode, or the largest
+          // non-fitting one (closest we can offer when nothing actually contains the request).
+          continue;
+        } else if (area == best_area && refresh_diff >= best_refresh_diff) {
+          continue;
+        }
+
+        best = mode;
+        best_fits = fits;
+        best_ar_diff = ar_diff;
+        best_area = area;
+        best_refresh_diff = refresh_diff;
+      }
+
+      return best;
     }
 
     /**
@@ -1153,8 +1183,7 @@ namespace kwin {
       } else if (!std::strcmp(interface, kde_output_management_v2_interface.name)) {
         // kde_output_management_v2 has no events (request-only), so unlike kde_output_device_v2
         // there's no ABI concern binding at whatever version the compositor advertises - needed
-        // for set_primary_output (v2) and set_custom_modes (v18, transitively via the
-        // configuration objects this creates, which inherit its bound version).
+        // for set_primary_output (v2).
         self->kde_output_management = static_cast<struct kde_output_management_v2 *>(
           wl_registry_bind(reg, name, &kde_output_management_v2_interface, version)
         );
@@ -1428,14 +1457,13 @@ namespace platf {
   }
 
   /**
-   * @brief Set a KWin output device to a specific resolution/refresh rate, synthesizing a custom
-   * mode via kde_mode_list_v2 if no matching mode is already advertised.
+   * @brief Set a KWin output device to a resolution/refresh rate already advertised by that device.
    *
    * @param output_id Device name (== id) to change.
    * @param width Desired width, in pixels.
    * @param height Desired height, in pixels.
    * @param refresh_rate Desired refresh rate, in Hz.
-   * @return True if the mode was applied successfully.
+   * @return True if a matching mode was found and applied successfully.
    */
   bool kwin_set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
     kwin::output_management_t management;
