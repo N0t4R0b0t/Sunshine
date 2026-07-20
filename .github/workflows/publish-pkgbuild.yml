@@ -92,6 +92,9 @@ jobs:
           # Matches upstream's calendar-versioning scheme (vYYYY.M{D}D.HHMMSS, UTC, from the
           # commit's committer date) instead of the tag text, so pkgver reflects when the
           # published commit actually landed rather than an arbitrary tag name.
+          # Workspace was just chown'd to builder above, so root (running this step) needs an
+          # explicit safe.directory exception to run git commands here.
+          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
           pkgver="$(TZ=UTC git log -1 --date='format-local:%Y.%-m%d.%H%M%S' --format=%cd HEAD)"
           echo "Derived pkgver: ${pkgver}"
           echo "pkgver=${pkgver}" >> "${GITHUB_OUTPUT}"
