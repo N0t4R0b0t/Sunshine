@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <limits>
 #include <thread>
 #include <unistd.h>
 
@@ -2113,7 +2114,27 @@ namespace platf {
       correlate_to_wayland(cds);
     }
 
-    // Deduce the full virtual desktop size
+    // Deduce the full virtual desktop size. Monitor offsets are in the compositor's global
+    // coordinate space, which doesn't reset to (0,0) just because other outputs got disabled -
+    // e.g. a dummy display that used to sit alongside other monitors keeps its old offset even
+    // when it's the only one left enabled. Normalize by the minimum offset seen so the bounding
+    // box (and therefore the absolute mouse coordinate mapping derived from it) always starts at
+    // (0,0), regardless of where the compositor happens to have positioned the enabled output(s).
+    int min_offset_x = std::numeric_limits<int>::max();
+    int min_offset_y = std::numeric_limits<int>::max();
+    for (auto &card_descriptor : cds) {
+      for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+        min_offset_x = std::min(min_offset_x, monitor_descriptor.viewport.offset_x);
+        min_offset_y = std::min(min_offset_y, monitor_descriptor.viewport.offset_y);
+      }
+    }
+    if (min_offset_x == std::numeric_limits<int>::max()) {
+      min_offset_x = 0;
+    }
+    if (min_offset_y == std::numeric_limits<int>::max()) {
+      min_offset_y = 0;
+    }
+
     kms::env_width = 0;
     kms::env_height = 0;
 
@@ -2122,6 +2143,9 @@ namespace platf {
 
     for (auto &card_descriptor : cds) {
       for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+        monitor_descriptor.viewport.offset_x -= min_offset_x;
+        monitor_descriptor.viewport.offset_y -= min_offset_y;
+
         BOOST_LOG(debug) << "Monitor description"sv;
         BOOST_LOG(debug) << "Resolution: "sv << monitor_descriptor.viewport.width << 'x' << monitor_descriptor.viewport.height;
         BOOST_LOG(debug) << "Offset: "sv << monitor_descriptor.viewport.offset_x << 'x' << monitor_descriptor.viewport.offset_y;
