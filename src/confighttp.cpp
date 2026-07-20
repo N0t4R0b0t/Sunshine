@@ -889,6 +889,7 @@ namespace confighttp {
       nlohmann::json j;
       j["name"] = layout.name;
       j["is_restore"] = layout.is_restore;
+      j["is_streaming"] = layout.is_streaming;
       j["outputs"] = nlohmann::json::array();
       for (const auto &output : layout.outputs) {
         j["outputs"].push_back(display_output_to_json(output));
@@ -1001,8 +1002,9 @@ namespace confighttp {
         return l.name == name;
       });
       if (it != layouts.end()) {
-        // Preserve the existing restore designation when overwriting a layout by name.
+        // Preserve the existing restore/streaming designations when overwriting a layout by name.
         layout.is_restore = it->is_restore;
+        layout.is_streaming = it->is_streaming;
         *it = layout;
       } else {
         layouts.push_back(layout);
