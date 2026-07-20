@@ -26,7 +26,6 @@
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
-#include "input.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
@@ -1048,18 +1047,28 @@ namespace nvhttp {
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
 
-      if (config::sunshine.layout_management_enabled && display_layout::apply_streaming_layout()) {
-        // The compositor's input stack can calibrate the virtual mouse device's coordinate
-        // mapping when it's first discovered and never revisit it - recreate the device so it's
-        // recalibrated against the layout we just switched to.
-        input::refresh();
+      if (config::sunshine.layout_management_enabled) {
+        display_layout::apply_streaming_layout();
       }
 
-      // Match the client's requested resolution, if it named a specific output to target -
-      // independent of layout management, and applied after it so the target output is already
-      // enabled if a streaming layout just turned it on.
+      // Match the client's requested resolution - independent of layout management, and applied
+      // after it so the target output is already enabled if a streaming layout just turned it on.
       if (launch_session->width > 0 && launch_session->height > 0 && launch_session->fps > 0) {
         auto output_id = display_device::map_output_name(config::video.output_name);
+        if (output_id.empty()) {
+          // No explicit output configured (output_name left on auto) - target whichever output
+          // is actually enabled right now, e.g. the dummy display a streaming layout just
+          // switched to. Prefer the primary one if more than one happens to be enabled.
+          for (const auto &output : platf::enum_display_outputs()) {
+            if (!output.enabled) {
+              continue;
+            }
+            output_id = output.id;
+            if (output.primary) {
+              break;
+            }
+          }
+        }
         if (!output_id.empty()) {
           platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
         }
@@ -1177,18 +1186,28 @@ namespace nvhttp {
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
 
-      if (config::sunshine.layout_management_enabled && display_layout::apply_streaming_layout()) {
-        // The compositor's input stack can calibrate the virtual mouse device's coordinate
-        // mapping when it's first discovered and never revisit it - recreate the device so it's
-        // recalibrated against the layout we just switched to.
-        input::refresh();
+      if (config::sunshine.layout_management_enabled) {
+        display_layout::apply_streaming_layout();
       }
 
-      // Match the client's requested resolution, if it named a specific output to target -
-      // independent of layout management, and applied after it so the target output is already
-      // enabled if a streaming layout just turned it on.
+      // Match the client's requested resolution - independent of layout management, and applied
+      // after it so the target output is already enabled if a streaming layout just turned it on.
       if (launch_session->width > 0 && launch_session->height > 0 && launch_session->fps > 0) {
         auto output_id = display_device::map_output_name(config::video.output_name);
+        if (output_id.empty()) {
+          // No explicit output configured (output_name left on auto) - target whichever output
+          // is actually enabled right now, e.g. the dummy display a streaming layout just
+          // switched to. Prefer the primary one if more than one happens to be enabled.
+          for (const auto &output : platf::enum_display_outputs()) {
+            if (!output.enabled) {
+              continue;
+            }
+            output_id = output.id;
+            if (output.primary) {
+              break;
+            }
+          }
+        }
         if (!output_id.empty()) {
           platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
         }
