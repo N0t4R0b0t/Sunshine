@@ -279,6 +279,21 @@ async function toggleRestoreLayout(layout) {
   }
 }
 
+async function toggleStreamingLayout(layout) {
+  const name = layout.is_streaming ? '' : layout.name
+  const response = await apiFetch('./api/display/layouts/set-streaming', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+
+  if (response.ok) {
+    await refreshLayouts()
+  } else {
+    notifyKey.error('config.display_layout_set_streaming_failed')
+  }
+}
+
 onMounted(async () => {
   await checkSupported()
   if (supported.value) {
@@ -356,10 +371,18 @@ onMounted(async () => {
             <span v-if="layout.is_restore" class="badge text-bg-success ms-2">
               {{ $t('config.display_layout_restore_badge') }}
             </span>
+            <span v-if="layout.is_streaming" class="badge text-bg-info ms-2">
+              {{ $t('config.display_layout_streaming_badge') }}
+            </span>
           </span>
           <span>
             <button type="button" class="btn btn-sm btn-primary me-2" @click="applyLayout(layout.name)">
               {{ $t('config.display_layout_apply') }}
+            </button>
+            <button type="button" class="btn btn-sm me-2"
+                    :class="layout.is_streaming ? 'btn-info' : 'btn-outline-info'"
+                    @click="toggleStreamingLayout(layout)">
+              {{ layout.is_streaming ? $t('config.display_layout_unset_streaming') : $t('config.display_layout_set_streaming') }}
             </button>
             <button type="button" class="btn btn-sm me-2"
                     :class="layout.is_restore ? 'btn-success' : 'btn-outline-success'"

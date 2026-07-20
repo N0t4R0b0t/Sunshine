@@ -1236,6 +1236,52 @@ namespace confighttp {
   }
 
   /**
+   * @brief Designate a saved layout to be applied automatically when a client connects, clearing
+   * the designation from every other saved layout. Requires `layout_management_enabled` to be
+   * turned on in the config for the automatic trigger to actually act on this designation.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   * An empty name clears the designation entirely.
+   *
+   * @api_examples{/api/display/layouts/set-streaming| POST| {"name":"Dummy only"}}
+   */
+  void setStreamingDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.value("name", std::string {});
+
+      nlohmann::json output_tree;
+      output_tree["status"] = display_layout::set_streaming_layout(name);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SetStreamingDisplayLayout: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
    * @brief Get the live list of GPU render adapters available for capture/encode.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2252,6 +2298,7 @@ namespace confighttp {
     server.resource["^/api/display/layouts/apply$"]["POST"] = applyDisplayLayout;
     server.resource["^/api/display/apply$"]["POST"] = applyDisplayOutputs;
     server.resource["^/api/display/layouts/set-restore$"]["POST"] = setRestoreDisplayLayout;
+    server.resource["^/api/display/layouts/set-streaming$"]["POST"] = setStreamingDisplayLayout;
     server.resource["^/api/adapters$"]["GET"] = getAdapters;
     server.resource["^/api/audio-sinks$"]["GET"] = getAudioSinks;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
