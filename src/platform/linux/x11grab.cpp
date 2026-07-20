@@ -1225,6 +1225,23 @@ namespace platf {
   }
 
   /**
+   * @brief Set an X11 RandR output to a specific resolution/refresh rate.
+   *
+   * Not yet implemented: unlike the KWin backend (which asks the compositor to generate a mode
+   * from the resolution/refresh directly), XRandR's XRRCreateMode() requires a fully computed
+   * CVT/GTF modeline (htotal/vtotal/hsync/vsync/pixel clock) supplied by the client. That's real,
+   * well-established VESA timing math, but nontrivial to get right and this fork has no X11
+   * session to validate it against, so it's deliberately left unimplemented rather than shipping
+   * unverified timing calculations.
+   *
+   * @return Always `false`.
+   */
+  bool x11_set_display_resolution(const std::string &, int, int, double) {
+    BOOST_LOG(warning) << "Setting a custom X11 resolution is not yet implemented"sv;
+    return false;
+  }
+
+  /**
    * @brief Release image resources.
    */
   void freeImage(XImage *p) {

@@ -1256,6 +1256,7 @@ namespace platf {
   std::shared_ptr<display_t> x11_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
   std::vector<platf::display_output_t> x11_enum_outputs();
   bool x11_apply_outputs(const std::vector<platf::display_output_t> &desired);
+  bool x11_set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate);
 
   bool verify_x11() {
     return window_system == window_system_e::X11 && !x11_display_names().empty();
@@ -1277,6 +1278,7 @@ namespace platf {
   std::shared_ptr<display_t> kwin_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
   std::vector<platf::display_output_t> kwin_enum_outputs();
   bool kwin_apply_outputs(const std::vector<platf::display_output_t> &desired);
+  bool kwin_set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate);
 
   bool verify_kwin() {
     // Note: The separate kwin_available check is necessary because with CAP_SYS_ADMIN kwin_display_names is never empty during startup
@@ -1358,6 +1360,26 @@ namespace platf {
     }
 #endif
     BOOST_LOG(warning) << "Applying a display layout is only supported on the X11 and KWin capture backends"sv;
+    return false;
+  }
+
+  /**
+   * @brief Set a display output to a specific resolution/refresh rate, synthesizing a custom
+   * mode if no matching mode already exists.
+   * Currently only supported when the active capture backend is X11 or KWin.
+   */
+  bool set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
+#ifdef SUNSHINE_BUILD_X11
+    if (sources[source::X11]) {
+      return x11_set_display_resolution(output_id, width, height, refresh_rate);
+    }
+#endif
+#ifdef SUNSHINE_BUILD_KWIN
+    if (window_system == window_system_e::WAYLAND && kwin_available()) {
+      return kwin_set_display_resolution(output_id, width, height, refresh_rate);
+    }
+#endif
+    BOOST_LOG(warning) << "Setting a custom display resolution is only supported on the X11 and KWin capture backends"sv;
     return false;
   }
 
