@@ -12,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -934,7 +935,113 @@ namespace kwin {
       return wait_for_apply();
     }
 
+    /**
+     * @brief Set a bound device to a specific resolution/refresh rate, synthesizing a custom mode
+     * via kde_mode_list_v2 if no matching mode is already advertised by the device.
+     *
+     * Two round trips are required: the first asks the compositor to generate the custom mode and
+     * add it to the device (kde_output_configuration_v2.set_custom_modes), which - per protocol -
+     * causes it to show up through the same kde_output_device_v2.mode event used for EDID modes.
+     * Only once that's observed can it be selected via kde_output_configuration_v2.mode, the same
+     * request used for any other mode.
+     *
+     * @param output_id Device name (== id) to change.
+     * @param width Desired width, in pixels.
+     * @param height Desired height, in pixels.
+     * @param refresh_rate Desired refresh rate, in Hz.
+     * @return True if the mode was created and selected successfully.
+     */
+    bool apply_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
+      struct kde_output_device_v2 *target_device = nullptr;
+      for (auto &[device, state] : devices) {
+        if (state.name == output_id) {
+          target_device = device;
+          break;
+        }
+      }
+      if (!target_device) {
+        BOOST_LOG(warning) << "[kwingrab] set_display_resolution: no device named \""sv << output_id << "\""sv;
+        return false;
+      }
+
+      const auto refresh_mhz = static_cast<int32_t>(std::llround(refresh_rate * 1000.0));
+
+      // Already available? No need to synthesize a custom mode at all.
+      struct kde_output_device_mode_v2 *target_mode = find_mode(width, height, refresh_mhz);
+
+      if (!target_mode) {
+        auto *mode_list = kde_output_management_v2_create_mode_list(kde_output_management);
+        kde_mode_list_v2_set_resolution(mode_list, width, height);
+        kde_mode_list_v2_set_refresh_rate(mode_list, refresh_mhz);
+        kde_mode_list_v2_set_reduced_blanking(mode_list, 0);
+
+        if (!begin_configuration()) {
+          kde_mode_list_v2_destroy(mode_list);
+          return false;
+        }
+        kde_output_configuration_v2_set_custom_modes(kde_output_configuration, target_device, mode_list);
+        kde_output_configuration_v2_apply(kde_output_configuration);
+        bool ok = wait_for_apply();
+        kde_mode_list_v2_destroy(mode_list);
+        if (!ok) {
+          BOOST_LOG(warning) << "[kwingrab] compositor rejected custom mode "sv << width << 'x' << height << '@' << refresh_rate;
+          return false;
+        }
+
+        // Give the compositor a chance to advertise the newly generated mode via the normal
+        // kde_output_device_v2.mode event before looking for it.
+        wl_display_roundtrip(wl_display);
+        wl_display_roundtrip(wl_display);
+
+        target_mode = find_mode(width, height, refresh_mhz);
+        if (!target_mode) {
+          BOOST_LOG(warning) << "[kwingrab] custom mode "sv << width << 'x' << height << '@' << refresh_rate << " was not advertised after set_custom_modes"sv;
+          return false;
+        }
+      }
+
+      if (!begin_configuration()) {
+        return false;
+      }
+      kde_output_configuration_v2_mode(kde_output_configuration, target_device, target_mode);
+      kde_output_configuration_v2_apply(kde_output_configuration);
+      return wait_for_apply();
+    }
+
   private:
+    /**
+     * @brief Find an already-advertised mode matching the given resolution/refresh, within 50mHz.
+     */
+    struct kde_output_device_mode_v2 *find_mode(int width, int height, int32_t refresh_mhz) {
+      for (auto &[mode, state] : modes) {
+        if (state.width == width && state.height == height && std::abs(state.refresh_mhz - refresh_mhz) < 50) {
+          return mode;
+        }
+      }
+      return nullptr;
+    }
+
+    /**
+     * @brief Destroy any previous configuration object and start a fresh one, resetting apply state.
+     * @return True on success.
+     */
+    bool begin_configuration() {
+      if (kde_output_configuration) {
+        kde_output_configuration_v2_destroy(kde_output_configuration);
+        kde_output_configuration = nullptr;
+      }
+      apply_done = false;
+      apply_succeeded = false;
+      apply_failure_reason.clear();
+
+      kde_output_configuration = kde_output_management_v2_create_configuration(kde_output_management);
+      if (!kde_output_configuration) {
+        return false;
+      }
+      kde_output_configuration_v2_add_listener(kde_output_configuration, &configuration_listener, this);
+      return true;
+    }
+
     int wait_for_apply() {
       // Dispatch until we get applied/failed, with a 5s timeout
       auto deadline = std::chrono::steady_clock::now() + 5s;
@@ -994,12 +1101,14 @@ namespace kwin {
         kde_output_device_v2_add_listener(device, &device_listener, self);
         BOOST_LOG(debug) << "[kwingrab] bound kde_output_device_v2 version "sv << bind_ver << " instance: "sv << device;
       } else if (!std::strcmp(interface, kde_output_management_v2_interface.name)) {
-        // v2 needed for set_primary_output
-        uint32_t bind_ver = std::min(version, static_cast<uint32_t>(2));
+        // kde_output_management_v2 has no events (request-only), so unlike kde_output_device_v2
+        // there's no ABI concern binding at whatever version the compositor advertises - needed
+        // for set_primary_output (v2) and set_custom_modes (v18, transitively via the
+        // configuration objects this creates, which inherit its bound version).
         self->kde_output_management = static_cast<struct kde_output_management_v2 *>(
-          wl_registry_bind(reg, name, &kde_output_management_v2_interface, bind_ver)
+          wl_registry_bind(reg, name, &kde_output_management_v2_interface, version)
         );
-        BOOST_LOG(debug) << "[kwingrab] bound kde_output_management_v2 version "sv << bind_ver;
+        BOOST_LOG(debug) << "[kwingrab] bound kde_output_management_v2 version "sv << version;
       }
     }
 
@@ -1300,5 +1409,23 @@ namespace platf {
     }
 
     return true;
+  }
+
+  /**
+   * @brief Set a KWin output device to a specific resolution/refresh rate, synthesizing a custom
+   * mode via kde_mode_list_v2 if no matching mode is already advertised.
+   *
+   * @param output_id Device name (== id) to change.
+   * @param width Desired width, in pixels.
+   * @param height Desired height, in pixels.
+   * @param refresh_rate Desired refresh rate, in Hz.
+   * @return True if the mode was applied successfully.
+   */
+  bool kwin_set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
+    kwin::output_management_t management;
+    if (management.init() < 0) {
+      return false;
+    }
+    return management.apply_resolution(output_id, width, height, refresh_rate);
   }
 }  // namespace platf

@@ -1138,6 +1138,15 @@ namespace platf {
   }
 
   /**
+   * @brief Set a display output to a specific resolution/refresh rate.
+   *
+   * @return Always `false` - see `enum_display_outputs()`.
+   */
+  bool set_display_resolution(const std::string &, int, int, double) {
+    return false;
+  }
+
+  /**
    * @brief Check whether DXGI reports that adapter or driver enumeration is stale.
    *
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.

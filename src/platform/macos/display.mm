@@ -316,6 +316,15 @@ namespace platf {
   }
 
   /**
+   * @brief Set a display output to a specific resolution/refresh rate.
+   *
+   * @return Always `false` - see `enum_display_outputs()`.
+   */
+  bool set_display_resolution(const std::string &, int, int, double) {
+    return false;
+  }
+
+  /**
    * @brief Report whether encoder backends should be probed again before streaming.
    *
    * @return Always `true` because macOS GPU changes are not tracked by this backend.
