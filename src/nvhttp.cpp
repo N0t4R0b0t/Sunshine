@@ -22,6 +22,7 @@
 // local includes
 #include "config.h"
 #include "display_device.h"
+#include "display_layout.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -1046,6 +1047,10 @@ namespace nvhttp {
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
 
+      if (config::sunshine.layout_management_enabled) {
+        display_layout::apply_streaming_layout();
+      }
+
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
@@ -1157,6 +1162,10 @@ namespace nvhttp {
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
+
+      if (config::sunshine.layout_management_enabled) {
+        display_layout::apply_streaming_layout();
+      }
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
