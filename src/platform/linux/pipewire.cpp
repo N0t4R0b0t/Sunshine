@@ -778,6 +778,12 @@ namespace pipewire {
             this->logical_height = monitor->viewport.logical_height;
             BOOST_LOG(debug) << "[pipewire] Set logical resolution: "sv << logical_width << 'x' << logical_height;
           }
+          // Disabled/unmatched outputs can still show up here as degenerate zero-size entries
+          // (offset defaults to (0,0)) - exclude them, otherwise a phantom (0,0) always wins the
+          // min() below and silently defeats the normalization.
+          if (monitor->viewport.width <= 0 || monitor->viewport.height <= 0) {
+            continue;
+          }
           min_offset_x = std::min(min_offset_x, monitor->viewport.offset_x);
           min_offset_y = std::min(min_offset_y, monitor->viewport.offset_y);
           // Update desktop dimensions to setup maximum environment size over all screens

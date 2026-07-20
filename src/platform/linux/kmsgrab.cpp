@@ -2120,10 +2120,16 @@ namespace platf {
     // when it's the only one left enabled. Normalize by the minimum offset seen so the bounding
     // box (and therefore the absolute mouse coordinate mapping derived from it) always starts at
     // (0,0), regardless of where the compositor happens to have positioned the enabled output(s).
+    // Disabled/unmatched outputs can still show up here as degenerate zero-size entries (offset
+    // defaults to (0,0)) - exclude them, otherwise a phantom (0,0) always wins the min() below
+    // and silently defeats the normalization.
     int min_offset_x = std::numeric_limits<int>::max();
     int min_offset_y = std::numeric_limits<int>::max();
     for (auto &card_descriptor : cds) {
       for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+        if (monitor_descriptor.viewport.width <= 0 || monitor_descriptor.viewport.height <= 0) {
+          continue;
+        }
         min_offset_x = std::min(min_offset_x, monitor_descriptor.viewport.offset_x);
         min_offset_y = std::min(min_offset_y, monitor_descriptor.viewport.offset_y);
       }
@@ -2143,12 +2149,16 @@ namespace platf {
 
     for (auto &card_descriptor : cds) {
       for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
-        monitor_descriptor.viewport.offset_x -= min_offset_x;
-        monitor_descriptor.viewport.offset_y -= min_offset_y;
-
         BOOST_LOG(debug) << "Monitor description"sv;
         BOOST_LOG(debug) << "Resolution: "sv << monitor_descriptor.viewport.width << 'x' << monitor_descriptor.viewport.height;
         BOOST_LOG(debug) << "Offset: "sv << monitor_descriptor.viewport.offset_x << 'x' << monitor_descriptor.viewport.offset_y;
+
+        if (monitor_descriptor.viewport.width <= 0 || monitor_descriptor.viewport.height <= 0) {
+          continue;
+        }
+
+        monitor_descriptor.viewport.offset_x -= min_offset_x;
+        monitor_descriptor.viewport.offset_y -= min_offset_y;
 
         kms::env_width = std::max(kms::env_width, (int) (monitor_descriptor.viewport.offset_x + monitor_descriptor.viewport.width));
         kms::env_height = std::max(kms::env_height, (int) (monitor_descriptor.viewport.offset_y + monitor_descriptor.viewport.height));
