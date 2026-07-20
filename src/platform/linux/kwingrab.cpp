@@ -1006,6 +1006,9 @@ namespace kwin {
         kde_mode_list_v2_set_resolution(mode_list, width, height);
         kde_mode_list_v2_set_refresh_rate(mode_list, refresh_mhz);
         kde_mode_list_v2_set_reduced_blanking(mode_list, 0);
+        // Setting properties alone doesn't add anything to the list - add_mode is what actually
+        // commits the currently-set properties as a candidate mode (kde-output-management-v2.xml).
+        kde_mode_list_v2_add_mode(mode_list);
 
         if (!begin_configuration()) {
           kde_mode_list_v2_destroy(mode_list);
