@@ -54,6 +54,7 @@ namespace display_layout {
       nlohmann::json j;
       j["name"] = layout.name;
       j["is_restore"] = layout.is_restore;
+      j["is_streaming"] = layout.is_streaming;
       j["outputs"] = nlohmann::json::array();
       for (const auto &output : layout.outputs) {
         j["outputs"].push_back(to_json(output));
@@ -65,6 +66,7 @@ namespace display_layout {
       layout_t layout;
       layout.name = j.value("name", std::string {});
       layout.is_restore = j.value("is_restore", false);
+      layout.is_streaming = j.value("is_streaming", false);
       for (const auto &output_json : j.value("outputs", nlohmann::json::array())) {
         layout.outputs.push_back(output_from_json(output_json));
       }
@@ -134,6 +136,42 @@ namespace display_layout {
     bool ok = platf::apply_display_outputs(restore_layout->outputs);
     if (!ok) {
       BOOST_LOG(warning) << "display_layout: failed to apply restore layout \""sv << restore_layout->name << "\""sv;
+    }
+    return ok;
+  }
+
+  std::optional<layout_t> find_streaming_layout() {
+    for (auto &layout : load_layouts()) {
+      if (layout.is_streaming) {
+        return layout;
+      }
+    }
+    return std::nullopt;
+  }
+
+  bool set_streaming_layout(const std::string &name) {
+    auto layouts = load_layouts();
+    bool found = false;
+    for (auto &layout : layouts) {
+      layout.is_streaming = !name.empty() && layout.name == name;
+      found = found || layout.is_streaming;
+    }
+    if (!name.empty() && !found) {
+      BOOST_LOG(warning) << "display_layout::set_streaming_layout: no layout named \""sv << name << "\" - clearing streaming designation"sv;
+    }
+    return save_layouts(layouts);
+  }
+
+  bool apply_streaming_layout() {
+    auto streaming_layout = find_streaming_layout();
+    if (!streaming_layout) {
+      return false;
+    }
+
+    BOOST_LOG(info) << "display_layout: applying streaming layout \""sv << streaming_layout->name << "\""sv;
+    bool ok = platf::apply_display_outputs(streaming_layout->outputs);
+    if (!ok) {
+      BOOST_LOG(warning) << "display_layout: failed to apply streaming layout \""sv << streaming_layout->name << "\""sv;
     }
     return ok;
   }
