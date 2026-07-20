@@ -30,6 +30,7 @@
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
+#include "input.h"
 #include "logging.h"
 #include "network.h"
 #include "nvhttp.h"
@@ -1424,8 +1425,11 @@ namespace nvhttp {
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
 
-      if (config::sunshine.layout_management_enabled) {
-        display_layout::apply_streaming_layout();
+      if (config::sunshine.layout_management_enabled && display_layout::apply_streaming_layout()) {
+        // The compositor's input stack can calibrate the virtual mouse device's coordinate
+        // mapping when it's first discovered and never revisit it - recreate the device so it's
+        // recalibrated against the layout we just switched to.
+        input::refresh();
       }
 
       // Match the client's requested resolution, if it named a specific output to target -
@@ -1550,8 +1554,11 @@ namespace nvhttp {
       // change the active displays.
       display_device::configure_display(config::video, *launch_session);
 
-      if (config::sunshine.layout_management_enabled) {
-        display_layout::apply_streaming_layout();
+      if (config::sunshine.layout_management_enabled && display_layout::apply_streaming_layout()) {
+        // The compositor's input stack can calibrate the virtual mouse device's coordinate
+        // mapping when it's first discovered and never revisit it - recreate the device so it's
+        // recalibrated against the layout we just switched to.
+        input::refresh();
       }
 
       // Match the client's requested resolution, if it named a specific output to target -
