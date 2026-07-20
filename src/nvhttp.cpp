@@ -1051,6 +1051,16 @@ namespace nvhttp {
         display_layout::apply_streaming_layout();
       }
 
+      // Match the client's requested resolution, if it named a specific output to target -
+      // independent of layout management, and applied after it so the target output is already
+      // enabled if a streaming layout just turned it on.
+      if (launch_session->width > 0 && launch_session->height > 0 && launch_session->fps > 0) {
+        auto output_id = display_device::map_output_name(config::video.output_name);
+        if (!output_id.empty()) {
+          platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
+        }
+      }
+
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
@@ -1165,6 +1175,16 @@ namespace nvhttp {
 
       if (config::sunshine.layout_management_enabled) {
         display_layout::apply_streaming_layout();
+      }
+
+      // Match the client's requested resolution, if it named a specific output to target -
+      // independent of layout management, and applied after it so the target output is already
+      // enabled if a streaming layout just turned it on.
+      if (launch_session->width > 0 && launch_session->height > 0 && launch_session->fps > 0) {
+        auto output_id = display_device::map_output_name(config::video.output_name);
+        if (!output_id.empty()) {
+          platf::set_display_resolution(output_id, launch_session->width, launch_session->height, static_cast<double>(launch_session->fps));
+        }
       }
 
       // Probe encoders again before streaming to ensure our chosen

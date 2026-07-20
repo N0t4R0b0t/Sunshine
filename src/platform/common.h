@@ -933,6 +933,19 @@ namespace platf {
   bool apply_display_outputs(const std::vector<display_output_t> &desired);
 
   /**
+   * @brief Set a display output to a specific resolution/refresh rate, synthesizing a custom mode
+   * if no matching mode already exists (analogous to a custom-resolution tool on Windows).
+   * Only supported on backends that expose synchronous mode changes (currently X11 and KWin on
+   * Linux). Only the mode is changed - position, rotation, and enabled state are left untouched.
+   * @param output_id The output/connector identifier, as returned by `enum_display_outputs()`.
+   * @param width Desired width, in pixels.
+   * @param height Desired height, in pixels.
+   * @param refresh_rate Desired refresh rate, in Hz.
+   * @return `true` if the mode was applied successfully, `false` if unsupported or on failure.
+   */
+  bool set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate);
+
+  /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
