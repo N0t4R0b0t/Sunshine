@@ -901,6 +901,29 @@ namespace kwin {
      * @return True if the compositor applied the changes successfully.
      */
     bool apply(const std::vector<platf::display_output_t> &desired) {
+      // A saved layout's positions reflect wherever those outputs happened to sit when it was
+      // captured - e.g. a dummy that used to sit alongside other monitors keeps that offset in
+      // the saved layout even if this application only re-enables the dummy alone. Applying that
+      // position verbatim would leave the compositor's own desktop geometry genuinely anchored
+      // away from (0,0), which no amount of capture-side coordinate math can compensate for since
+      // it's the compositor's own cursor/pointer boundary that ends up wrong, not just what
+      // Sunshine computes. Normalize so the enabled outputs' bounding box always starts at (0,0).
+      int min_x = std::numeric_limits<int>::max();
+      int min_y = std::numeric_limits<int>::max();
+      for (const auto &output : desired) {
+        if (!output.enabled) {
+          continue;
+        }
+        min_x = std::min(min_x, output.x);
+        min_y = std::min(min_y, output.y);
+      }
+      if (min_x == std::numeric_limits<int>::max()) {
+        min_x = 0;
+      }
+      if (min_y == std::numeric_limits<int>::max()) {
+        min_y = 0;
+      }
+
       kde_output_configuration = kde_output_management_v2_create_configuration(kde_output_management);
       kde_output_configuration_v2_add_listener(kde_output_configuration, &configuration_listener, this);
 
@@ -915,7 +938,7 @@ namespace kwin {
 
         kde_output_configuration_v2_enable(kde_output_configuration, device, it->enabled ? 1 : 0);
         if (it->enabled) {
-          kde_output_configuration_v2_position(kde_output_configuration, device, it->x, it->y);
+          kde_output_configuration_v2_position(kde_output_configuration, device, it->x - min_x, it->y - min_y);
           int32_t desired_transform = degrees_to_kde_transform(it->rotation);
           if (desired_transform != state.transform) {
             kde_output_configuration_v2_transform(kde_output_configuration, device, desired_transform);
