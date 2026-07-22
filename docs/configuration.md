@@ -1475,6 +1475,37 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### force_video_output_fps
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Overrides the framerate Sunshine encodes/streams at, ignoring what the
+            client actually requested. Useful when the display mode driving capture
+            needs a different (typically higher, for compositor pacing precision on
+            synthesized/custom-EDID modes) refresh rate than a weak client can
+            actually decode - capture happens at the display's real refresh
+            independent of this setting, only the encoded stream's framerate changes.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>0</td>
+        <td>Disabled - use the client's requested framerate as-is.</td>
+    </tr>
+    <tr>
+        <td>1-1000</td>
+        <td>Always encode/stream at this framerate, regardless of what any client requests.</td>
+    </tr>
+</table>
+
 ## Network
 
 ### upnp
