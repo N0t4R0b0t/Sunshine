@@ -1885,7 +1885,11 @@ namespace platf {
 
 #ifndef SUNSHINE_BUILD_CUDA
         if (mem_type == mem_type_e::cuda) {
-          BOOST_LOG(warning) << "Attempting to use NVENC without CUDA support. Reverting back to GPU -> RAM -> GPU"sv;
+          // This is a build-time condition, not a runtime GPU/driver detection failure - it means
+          // this specific Sunshine binary was compiled without CUDA support (the build machine
+          // didn't have nvcc/the cuda package available), regardless of what GPU/driver is
+          // actually present at runtime. Reverting back to GPU -> RAM -> GPU.
+          BOOST_LOG(warning) << "This Sunshine build was compiled without CUDA support, so NVENC can't use the zero-copy GPU path. Reverting back to GPU -> RAM -> GPU"sv;
           return -1;
         }
 #endif
