@@ -789,7 +789,8 @@ namespace config {
     },  // display_device
 
     0,  // max_bitrate
-    0  // minimum_fps_target (0 = framerate)
+    0,  // minimum_fps_target (0 = framerate)
+    0  // force_video_output_fps (0 = disabled, use client's requested framerate)
   };
 
   /**
@@ -1688,6 +1689,7 @@ namespace config {
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {0.0, 1000.0});
+    int_between_f(vars, "force_video_output_fps", video.force_video_output_fps, {0, 1000});
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);
