@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { $tp } from '../../../platform-i18n'
 import PlatformLayout from '../../../PlatformLayout.vue'
+import { apiFetch } from '../../../fetch_utils'
 
 const props = defineProps([
   'platform',
@@ -9,13 +10,42 @@ const props = defineProps([
 ])
 
 const config = ref(props.config)
+const adapterNamePlaceholder = '/dev/dri/renderD128'
+
+const liveAdapters = ref([])
+const liveAdaptersSupported = ref(false)
+
+onMounted(async () => {
+  if (props.platform !== 'linux') {
+    return
+  }
+
+  try {
+    const response = await apiFetch('./api/adapters')
+    if (!response.ok) {
+      return
+    }
+    const data = await response.json()
+    liveAdaptersSupported.value = !!data.supported
+    liveAdapters.value = data.adapters || []
+  } catch (e) {
+    console.debug('AdapterNameSelector: failed to fetch live adapters', e)
+  }
+})
 </script>
 
 <template>
   <div class="mb-3" v-if="platform !== 'macos'">
     <label for="adapter_name" class="form-label">{{ $t('config.adapter_name') }}</label>
-    <input type="text" class="form-control" id="adapter_name"
-           :placeholder="$tp('config.adapter_name_placeholder', '/dev/dri/renderD128')"
+    <select v-if="platform === 'linux' && liveAdaptersSupported" class="form-select" id="adapter_name"
+            v-model="config.adapter_name">
+      <option value="">{{ $t('config.adapter_name_auto') }}</option>
+      <option v-for="adapter in liveAdapters" :key="adapter.id" :value="adapter.id">
+        {{ adapter.friendly_name }}
+      </option>
+    </select>
+    <input v-else type="text" class="form-control" id="adapter_name"
+           :placeholder="$tp('config.adapter_name_placeholder', adapterNamePlaceholder)"
            v-model="config.adapter_name" />
     <div class="form-text">
       <PlatformLayout :platform="platform">
