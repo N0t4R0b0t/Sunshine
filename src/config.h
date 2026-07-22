@@ -203,6 +203,7 @@ namespace config {
 
     int max_bitrate;  ///< Maximum bitrate ceiling in kbps for bitrate requested from the client.
     double minimum_fps_target;  ///< Lowest framerate that will be used when streaming. Range 0-1000, 0 = half of client's requested framerate.
+    int force_video_output_fps;  ///< Force this framerate for the encoded video stream, ignoring what the client requested. 0 = disabled (use the client's requested framerate). Useful when the display's own refresh rate shouldn't dictate how fast a weak client needs to render.
   };
 
   /**
