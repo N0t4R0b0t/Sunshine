@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <fstream>
+#include <limits>
 
 // lib includes
 #include <gio/gio.h>
@@ -760,6 +761,14 @@ namespace pipewire {
         int desktop_height = 0;
         int desktop_logical_width = 0;
         int desktop_logical_height = 0;
+        // Monitor offsets are in the compositor's global coordinate space, which doesn't reset
+        // to (0,0) just because other outputs got disabled - e.g. a dummy display that used to
+        // sit alongside other monitors keeps its old offset even when it's the only one left
+        // enabled. Track the minimum seen offset so the bounding box (and this stream's own
+        // offset_x/offset_y, used together for absolute mouse coordinate mapping) can be
+        // normalized to always start at (0,0).
+        int min_offset_x = std::numeric_limits<int>::max();
+        int min_offset_y = std::numeric_limits<int>::max();
         for (const auto &monitor : wl::monitors()) {
           BOOST_LOG(debug) << "[pipewire] Found output: '"sv << monitor->name << "' offset: "sv << monitor->viewport.offset_x << 'x' << monitor->viewport.offset_y << " resolution: "sv << monitor->viewport.width << 'x' << monitor->viewport.height << " logical resolution: "sv << monitor->viewport.logical_width << 'x' << monitor->viewport.logical_height;
           // If logical_width and logical_height are not valid try to update them to correct values by matching to monitor
@@ -769,6 +778,14 @@ namespace pipewire {
             this->logical_height = monitor->viewport.logical_height;
             BOOST_LOG(debug) << "[pipewire] Set logical resolution: "sv << logical_width << 'x' << logical_height;
           }
+          // Disabled/unmatched outputs can still show up here as degenerate zero-size entries
+          // (offset defaults to (0,0)) - exclude them, otherwise a phantom (0,0) always wins the
+          // min() below and silently defeats the normalization.
+          if (monitor->viewport.width <= 0 || monitor->viewport.height <= 0) {
+            continue;
+          }
+          min_offset_x = std::min(min_offset_x, monitor->viewport.offset_x);
+          min_offset_y = std::min(min_offset_y, monitor->viewport.offset_y);
           // Update desktop dimensions to setup maximum environment size over all screens
           desktop_width = std::max(desktop_width, monitor->viewport.offset_x + monitor->viewport.width);
           desktop_height = std::max(desktop_height, monitor->viewport.offset_y + monitor->viewport.height);
@@ -776,14 +793,22 @@ namespace pipewire {
           desktop_logical_width = std::max(desktop_logical_width, monitor->viewport.offset_x + monitor->viewport.logical_width);
           desktop_logical_height = std::max(desktop_logical_height, monitor->viewport.offset_y + monitor->viewport.logical_height);
         }
+        if (min_offset_x == std::numeric_limits<int>::max()) {
+          min_offset_x = 0;
+        }
+        if (min_offset_y == std::numeric_limits<int>::max()) {
+          min_offset_y = 0;
+        }
         if (env_height <= 0 || env_width <= 0) {
-          this->env_width = desktop_width;
-          this->env_height = desktop_height;
+          this->env_width = desktop_width - min_offset_x;
+          this->env_height = desktop_height - min_offset_y;
+          this->offset_x -= min_offset_x;
+          this->offset_y -= min_offset_y;
           BOOST_LOG(debug) << "[pipewire] Set desktop resolution: "sv << env_width << 'x' << env_height;
         }
         if (env_logical_height <= 0 || env_logical_width <= 0) {
-          this->env_logical_width = desktop_logical_width;
-          this->env_logical_height = desktop_logical_height;
+          this->env_logical_width = desktop_logical_width - min_offset_x;
+          this->env_logical_height = desktop_logical_height - min_offset_y;
           BOOST_LOG(debug) << "[pipewire] Set desktop logical resolution: "sv << env_logical_width << 'x' << env_logical_height;
         }
       }

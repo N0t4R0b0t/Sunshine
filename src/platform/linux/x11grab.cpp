@@ -3,7 +3,9 @@
  * @brief Definitions for x11 capture.
  */
 // standard includes
+#include <algorithm>
 #include <fstream>
+#include <limits>
 #include <thread>
 
 // plaform includes
@@ -74,6 +76,10 @@ namespace platf {
       _FN(GetScreenResources, XRRScreenResources *, (Display * dpy, Window window));
       _FN(GetOutputInfo, XRROutputInfo *, (Display * dpy, XRRScreenResources *resources, RROutput output));
       _FN(GetCrtcInfo, XRRCrtcInfo *, (Display * dpy, XRRScreenResources *resources, RRCrtc crtc));
+      _FN(SetCrtcConfig, Status, (Display * dpy, XRRScreenResources *resources, RRCrtc crtc, Time timestamp, int x, int y, RRMode mode, Rotation rotation, RROutput *outputs, int noutputs));
+      _FN(GetOutputPrimary, RROutput, (Display * dpy, Window window));
+      _FN(SetOutputPrimary, void, (Display * dpy, Window window, RROutput output));
+      _FN(SetScreenSize, void, (Display * dpy, Window window, int width, int height, int mmWidth, int mmHeight));
       _FN(FreeScreenResources, void, (XRRScreenResources * resources));
       _FN(FreeOutputInfo, void, (XRROutputInfo * outputInfo));
       _FN(FreeCrtcInfo, void, (XRRCrtcInfo * crtcInfo));
@@ -97,6 +103,10 @@ namespace platf {
           {(dyn::apiproc *) &GetScreenResources, "XRRGetScreenResources"},
           {(dyn::apiproc *) &GetOutputInfo, "XRRGetOutputInfo"},
           {(dyn::apiproc *) &GetCrtcInfo, "XRRGetCrtcInfo"},
+          {(dyn::apiproc *) &SetCrtcConfig, "XRRSetCrtcConfig"},
+          {(dyn::apiproc *) &GetOutputPrimary, "XRRGetOutputPrimary"},
+          {(dyn::apiproc *) &SetOutputPrimary, "XRRSetOutputPrimary"},
+          {(dyn::apiproc *) &SetScreenSize, "XRRSetScreenSize"},
           {(dyn::apiproc *) &FreeScreenResources, "XRRFreeScreenResources"},
           {(dyn::apiproc *) &FreeOutputInfo, "XRRFreeOutputInfo"},
           {(dyn::apiproc *) &FreeCrtcInfo, "XRRFreeCrtcInfo"},
@@ -988,6 +998,273 @@ namespace platf {
     }
 
     return names;
+  }
+
+  /**
+   * @brief Compute the refresh rate (Hz) of an RandR mode.
+   *
+   * @param screenr Screen resources containing the mode list.
+   * @param mode Mode identifier to look up.
+   * @return Refresh rate in Hz, or 0.0 if the mode could not be found.
+   */
+  /**
+   * @brief Convert an XRandR rotation bitmask to a clockwise degree value.
+   *
+   * @param rotation XRandR rotation bitmask (RR_Rotate_* bits, reflection bits ignored).
+   * @return 0, 90, 180, or 270.
+   */
+  static int x11_rotation_to_degrees(Rotation rotation) {
+    switch (rotation & 0xF) {
+      case RR_Rotate_90:
+        return 90;
+      case RR_Rotate_180:
+        return 180;
+      case RR_Rotate_270:
+        return 270;
+      default:
+        return 0;
+    }
+  }
+
+  /**
+   * @brief Convert a clockwise degree value to an XRandR rotation bitmask, preserving reflection bits.
+   *
+   * @param degrees 0, 90, 180, or 270 (other values are treated as 0).
+   * @param current_rotation Current rotation bitmask, whose reflection bits (if any) are preserved.
+   * @return XRandR rotation bitmask suitable for `SetCrtcConfig`.
+   */
+  static Rotation x11_degrees_to_rotation(int degrees, Rotation current_rotation) {
+    Rotation reflect_bits = current_rotation & (RR_Reflect_X | RR_Reflect_Y);
+    switch (degrees) {
+      case 90:
+        return RR_Rotate_90 | reflect_bits;
+      case 180:
+        return RR_Rotate_180 | reflect_bits;
+      case 270:
+        return RR_Rotate_270 | reflect_bits;
+      default:
+        return RR_Rotate_0 | reflect_bits;
+    }
+  }
+
+  static double x11_mode_refresh_rate(XRRScreenResources *screenr, RRMode mode) {
+    for (int i = 0; i < screenr->nmode; ++i) {
+      const XRRModeInfo &mode_info = screenr->modes[i];
+      if (mode_info.id != mode) {
+        continue;
+      }
+
+      if (mode_info.hTotal == 0 || mode_info.vTotal == 0) {
+        return 0.0;
+      }
+
+      return (double) mode_info.dotClock / ((double) mode_info.hTotal * (double) mode_info.vTotal);
+    }
+
+    return 0.0;
+  }
+
+  /**
+   * @brief Enumerate the live state (geometry, connection, primary) of every X11 RandR output.
+   *
+   * @return X11 display outputs, or an empty list when X11 probing fails.
+   */
+  std::vector<platf::display_output_t> x11_enum_outputs() {
+    if (load_x11()) {
+      BOOST_LOG(error) << "Couldn't init x11 libraries"sv;
+      return {};
+    }
+
+    x11::xdisplay_t xdisplay {x11::OpenDisplay(nullptr)};
+    if (!xdisplay) {
+      return {};
+    }
+
+    auto xwindow = DefaultRootWindow(xdisplay.get());
+    screen_res_t screenr {x11::rr::GetScreenResources(xdisplay.get(), xwindow)};
+    if (!screenr) {
+      return {};
+    }
+
+    RROutput primary = x11::rr::GetOutputPrimary(xdisplay.get(), xwindow);
+
+    std::vector<platf::display_output_t> outputs;
+    int monitor = 0;
+    for (int x = 0; x < screenr->noutput; ++x) {
+      output_info_t out_info {x11::rr::GetOutputInfo(xdisplay.get(), screenr.get(), screenr->outputs[x])};
+      if (!out_info) {
+        continue;
+      }
+
+      platf::display_output_t output;
+      output.id = std::to_string(monitor);
+      output.friendly_name = out_info->name;
+      output.connected = out_info->connection == RR_Connected;
+      output.primary = screenr->outputs[x] == primary;
+
+      if (out_info->crtc) {
+        crtc_info_t crt_info {x11::rr::GetCrtcInfo(xdisplay.get(), screenr.get(), out_info->crtc)};
+        if (crt_info) {
+          output.enabled = true;
+          output.x = crt_info->x;
+          output.y = crt_info->y;
+          output.width = crt_info->width;
+          output.height = crt_info->height;
+          output.refresh_rate = x11_mode_refresh_rate(screenr.get(), crt_info->mode);
+          output.rotation = x11_rotation_to_degrees(crt_info->rotation);
+        }
+      }
+
+      outputs.emplace_back(std::move(output));
+      ++monitor;
+    }
+
+    return outputs;
+  }
+
+  /**
+   * @brief Apply a desired arrangement of X11 RandR outputs via XRandR.
+   *
+   * @param desired Desired output states, keyed by `id` as returned from `x11_enum_outputs()`.
+   * @return `true` if every requested change was applied successfully.
+   */
+  bool x11_apply_outputs(const std::vector<platf::display_output_t> &desired) {
+    if (load_x11()) {
+      BOOST_LOG(error) << "Couldn't init x11 libraries"sv;
+      return false;
+    }
+
+    x11::xdisplay_t xdisplay {x11::OpenDisplay(nullptr)};
+    if (!xdisplay) {
+      return false;
+    }
+
+    auto xwindow = DefaultRootWindow(xdisplay.get());
+    screen_res_t screenr {x11::rr::GetScreenResources(xdisplay.get(), xwindow)};
+    if (!screenr) {
+      return false;
+    }
+
+    // A saved layout's positions reflect wherever those outputs happened to sit when it was
+    // captured - e.g. a dummy that used to sit alongside other monitors keeps that offset in the
+    // saved layout even if this application only re-enables the dummy alone. Applying that
+    // position verbatim would leave X11's own screen geometry genuinely anchored away from
+    // (0,0), which no amount of capture-side coordinate math can compensate for since it's X11's
+    // own cursor/pointer boundary that ends up wrong, not just what Sunshine computes. Normalize
+    // so the enabled outputs' bounding box always starts at (0,0).
+    int min_x = std::numeric_limits<int>::max();
+    int min_y = std::numeric_limits<int>::max();
+    for (const auto &output : desired) {
+      if (!output.enabled) {
+        continue;
+      }
+      min_x = std::min(min_x, output.x);
+      min_y = std::min(min_y, output.y);
+    }
+    if (min_x == std::numeric_limits<int>::max()) {
+      min_x = 0;
+    }
+    if (min_y == std::numeric_limits<int>::max()) {
+      min_y = 0;
+    }
+
+    // Grow the virtual screen to fit the desired bounding box before repositioning any CRTC,
+    // since XRRSetCrtcConfig fails if a CRTC would be placed outside the current screen size.
+    int max_x = 0;
+    int max_y = 0;
+    for (const auto &output : desired) {
+      if (!output.enabled) {
+        continue;
+      }
+      max_x = std::max(max_x, (output.x - min_x) + output.width);
+      max_y = std::max(max_y, (output.y - min_y) + output.height);
+    }
+    if (max_x > 0 && max_y > 0) {
+      x11::rr::SetScreenSize(xdisplay.get(), xwindow, max_x, max_y, 0, 0);
+    }
+
+    bool ok = true;
+    RROutput primary_output = 0;
+    int monitor = 0;
+    for (int x = 0; x < screenr->noutput; ++x) {
+      output_info_t out_info {x11::rr::GetOutputInfo(xdisplay.get(), screenr.get(), screenr->outputs[x])};
+      if (!out_info) {
+        continue;
+      }
+
+      auto id = std::to_string(monitor++);
+      auto it = std::find_if(desired.begin(), desired.end(), [&](const platf::display_output_t &output) {
+        return output.id == id;
+      });
+      if (it == desired.end()) {
+        continue;
+      }
+
+      if (it->primary) {
+        primary_output = screenr->outputs[x];
+      }
+
+      if (!it->enabled || !out_info->crtc) {
+        continue;
+      }
+
+      crtc_info_t crt_info {x11::rr::GetCrtcInfo(xdisplay.get(), screenr.get(), out_info->crtc)};
+      if (!crt_info) {
+        ok = false;
+        continue;
+      }
+
+      Rotation desired_rotation = x11_degrees_to_rotation(it->rotation, crt_info->rotation);
+      int target_x = it->x - min_x;
+      int target_y = it->y - min_y;
+
+      if (crt_info->x == target_x && crt_info->y == target_y && (int) crt_info->width == it->width &&
+          (int) crt_info->height == it->height && crt_info->rotation == desired_rotation) {
+        // No change needed for this output.
+        continue;
+      }
+
+      auto status = x11::rr::SetCrtcConfig(
+        xdisplay.get(),
+        screenr.get(),
+        out_info->crtc,
+        CurrentTime,
+        target_x,
+        target_y,
+        crt_info->mode,
+        desired_rotation,
+        crt_info->outputs,
+        crt_info->noutput
+      );
+
+      if (status != Success) {
+        BOOST_LOG(error) << "Failed to apply layout to display: "sv << out_info->name;
+        ok = false;
+      }
+    }
+
+    if (primary_output) {
+      x11::rr::SetOutputPrimary(xdisplay.get(), xwindow, primary_output);
+    }
+
+    return ok;
+  }
+
+  /**
+   * @brief Set an X11 RandR output to a specific resolution/refresh rate.
+   *
+   * Not yet implemented: unlike the KWin backend (which asks the compositor to generate a mode
+   * from the resolution/refresh directly), XRandR's XRRCreateMode() requires a fully computed
+   * CVT/GTF modeline (htotal/vtotal/hsync/vsync/pixel clock) supplied by the client. That's real,
+   * well-established VESA timing math, but nontrivial to get right and this fork has no X11
+   * session to validate it against, so it's deliberately left unimplemented rather than shipping
+   * unverified timing calculations.
+   *
+   * @return Always `false`.
+   */
+  bool x11_set_display_resolution(const std::string &, int, int, double) {
+    BOOST_LOG(warning) << "Setting a custom X11 resolution is not yet implemented"sv;
+    return false;
   }
 
   /**

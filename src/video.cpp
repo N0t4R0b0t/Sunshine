@@ -1514,6 +1514,7 @@ namespace video {
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
+    auto refresh_display_event = mail::man->event<bool>(mail::refresh_display);
 
     // Wait for the initial capture context or a request to stop the queue
     auto initial_capture_ctx = capture_ctx_queue->pop();
@@ -1661,6 +1662,12 @@ namespace video {
         }
 
         if (switch_display_event->peek()) {
+          artificial_reinit = true;
+          return false;
+        }
+
+        if (refresh_display_event->peek()) {
+          refresh_display_event->pop();
           artificial_reinit = true;
           return false;
         }
@@ -2627,6 +2634,7 @@ namespace video {
     std::shared_ptr<platf::display_t> disp;
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
+    auto refresh_display_event = mail::man->event<bool>(mail::refresh_display);
 
     if (synced_session_ctxs.empty()) {
       auto ctx = encode_session_ctx_queue.pop();
@@ -2740,6 +2748,12 @@ namespace video {
         })
 
         if (switch_display_event->peek()) {
+          ec = platf::capture_e::reinit;
+          return false;
+        }
+
+        if (refresh_display_event->peek()) {
+          refresh_display_event->pop();
           ec = platf::capture_e::reinit;
           return false;
         }

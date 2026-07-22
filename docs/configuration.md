@@ -1041,6 +1041,36 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### layout_management_enabled
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            <i>FreeBSD/Linux only.</i> Enables saved display-output layouts,
+            managed from a visual editor in the web UI (drag to reposition,
+            rotate, enable/disable, set primary). A layout can be designated
+            to auto-restore on Sunshine startup and client disconnect, and a
+            separate layout can be applied automatically on client connect -
+            useful for dummy-display-only capture setups that need to
+            survive an ungraceful shutdown with no physical monitor
+            available to fix things locally.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            layout_management_enabled = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_configuration_option
 
 <table>

@@ -22,6 +22,7 @@ extern "C" {
 // local includes
 #include "config.h"
 #include "display_device.h"
+#include "display_layout.h"
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
@@ -2197,6 +2198,13 @@ namespace stream {
 
         if (revert_display_config) {
           display_device::revert_configuration();
+        }
+
+        // Layout restore is independent of config_revert_on_disconnect/app-running state above -
+        // the user's expectation is that their restore layout always comes back once no clients
+        // are connected, regardless of whether an app is still considered "running".
+        if (config::sunshine.layout_management_enabled) {
+          display_layout::apply_restore_layout();
         }
 
         platf::streaming_will_stop();
