@@ -1193,6 +1193,12 @@ namespace rtsp_stream {
           config.monitor.framerateX100 = 0;
         }
       }
+      if (config::video.force_video_output_fps > 0 && config.monitor.framerate != config::video.force_video_output_fps) {
+        BOOST_LOG(info) << "Overriding client-requested framerate "sv << config.monitor.framerate
+                         << " with force_video_output_fps "sv << config::video.force_video_output_fps;
+        config.monitor.framerate = config::video.force_video_output_fps;
+        config.monitor.framerateX100 = config::video.force_video_output_fps * 100;
+      }
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
