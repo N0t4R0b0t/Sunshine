@@ -61,7 +61,8 @@
         "refresh_rate_only": []
       },
       "max_bitrate": 0,
-      "minimum_fps_target": 0
+      "minimum_fps_target": 0,
+      "force_video_output_fps": 0
     }
   },
   {
