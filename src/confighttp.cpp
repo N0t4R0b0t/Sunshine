@@ -33,6 +33,7 @@
 #include "confighttp.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "display_layout.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -841,6 +842,443 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "DeleteApp: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  namespace {
+    /**
+     * @brief Serialize a live display output to JSON for the web UI.
+     */
+    nlohmann::json display_output_to_json(const platf::display_output_t &output) {
+      nlohmann::json j;
+      j["id"] = output.id;
+      j["friendly_name"] = output.friendly_name;
+      j["connected"] = output.connected;
+      j["enabled"] = output.enabled;
+      j["primary"] = output.primary;
+      j["x"] = output.x;
+      j["y"] = output.y;
+      j["width"] = output.width;
+      j["height"] = output.height;
+      j["refresh_rate"] = output.refresh_rate;
+      j["rotation"] = output.rotation;
+      return j;
+    }
+
+    /**
+     * @brief Deserialize a display output from JSON, as submitted by the web UI.
+     */
+    platf::display_output_t display_output_from_json(const nlohmann::json &output_json) {
+      platf::display_output_t output;
+      output.id = output_json.value("id", std::string {});
+      output.friendly_name = output_json.value("friendly_name", std::string {});
+      output.connected = output_json.value("connected", false);
+      output.enabled = output_json.value("enabled", false);
+      output.primary = output_json.value("primary", false);
+      output.x = output_json.value("x", 0);
+      output.y = output_json.value("y", 0);
+      output.width = output_json.value("width", 0);
+      output.height = output_json.value("height", 0);
+      output.refresh_rate = output_json.value("refresh_rate", 0.0);
+      output.rotation = output_json.value("rotation", 0);
+      return output;
+    }
+
+    nlohmann::json layout_to_json(const display_layout::layout_t &layout) {
+      nlohmann::json j;
+      j["name"] = layout.name;
+      j["is_restore"] = layout.is_restore;
+      j["is_streaming"] = layout.is_streaming;
+      j["outputs"] = nlohmann::json::array();
+      for (const auto &output : layout.outputs) {
+        j["outputs"].push_back(display_output_to_json(output));
+      }
+      return j;
+    }
+  }  // namespace
+
+  /**
+   * @brief Get the live state of every known display output for the active capture backend.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/display/outputs| GET| null}
+   */
+  void getDisplayOutputs(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    auto outputs = platf::enum_display_outputs();
+
+    nlohmann::json output_tree;
+    output_tree["supported"] = !outputs.empty();
+    output_tree["outputs"] = nlohmann::json::array();
+    for (const auto &output : outputs) {
+      output_tree["outputs"].push_back(display_output_to_json(output));
+    }
+
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Get the list of saved display layouts.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/display/layouts| GET| null}
+   */
+  void getDisplayLayouts(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["layouts"] = nlohmann::json::array();
+    for (const auto &layout : display_layout::load_layouts()) {
+      output_tree["layouts"].push_back(layout_to_json(layout));
+    }
+
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Save the current (or an explicitly provided) display output arrangement as a named layout.
+   * If an existing layout has the same name, it is replaced.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   * If "outputs" is omitted, the live output arrangement is captured and saved under "name".
+   *
+   * @api_examples{/api/display/layouts| POST| {"name":"Docked"}}
+   */
+  void saveDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.at("name").get<std::string>();
+      if (name.empty()) {
+        bad_request(response, request, "Layout name must not be empty");
+        return;
+      }
+
+      display_layout::layout_t layout;
+      layout.name = name;
+      if (input_tree.contains("outputs") && !input_tree["outputs"].empty()) {
+        for (const auto &output_json : input_tree["outputs"]) {
+          layout.outputs.push_back(display_output_from_json(output_json));
+        }
+      } else {
+        layout.outputs = platf::enum_display_outputs();
+      }
+
+      auto layouts = display_layout::load_layouts();
+      auto it = std::find_if(layouts.begin(), layouts.end(), [&](const display_layout::layout_t &l) {
+        return l.name == name;
+      });
+      if (it != layouts.end()) {
+        // Preserve the existing restore/streaming designations when overwriting a layout by name.
+        layout.is_restore = it->is_restore;
+        layout.is_streaming = it->is_streaming;
+        *it = layout;
+      } else {
+        layouts.push_back(layout);
+      }
+
+      nlohmann::json output_tree;
+      output_tree["status"] = display_layout::save_layouts(layouts);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SaveDisplayLayout: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Delete a saved display layout by name.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/display/layouts/delete| POST| {"name":"Docked"}}
+   */
+  void deleteDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.at("name").get<std::string>();
+
+      auto layouts = display_layout::load_layouts();
+      auto new_size = std::erase_if(layouts, [&](const display_layout::layout_t &l) {
+        return l.name == name;
+      });
+
+      nlohmann::json output_tree;
+      if (new_size == 0) {
+        output_tree["status"] = false;
+        output_tree["error"] = "Layout not found";
+        send_response(response, output_tree);
+        return;
+      }
+
+      output_tree["status"] = display_layout::save_layouts(layouts);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "DeleteDisplayLayout: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Apply a saved display layout to the display server immediately.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/display/layouts/apply| POST| {"name":"Docked"}}
+   */
+  void applyDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.at("name").get<std::string>();
+
+      auto layouts = display_layout::load_layouts();
+      auto it = std::find_if(layouts.begin(), layouts.end(), [&](const display_layout::layout_t &l) {
+        return l.name == name;
+      });
+
+      nlohmann::json output_tree;
+      if (it == layouts.end()) {
+        output_tree["status"] = false;
+        output_tree["error"] = "Layout not found";
+        send_response(response, output_tree);
+        return;
+      }
+
+      bool applied = platf::apply_display_outputs(it->outputs);
+      output_tree["status"] = applied;
+      if (applied) {
+        // The active capture pipeline (if a stream is running) caches display geometry at
+        // startup and won't notice this change on its own - force it to reinitialize so
+        // absolute mouse coordinates stay in sync with the new layout.
+        mail::man->event<bool>(mail::refresh_display)->raise(true);
+      }
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "ApplyDisplayLayout: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Apply an arbitrary (unsaved) display output arrangement to the display server immediately.
+   * Unlike `applyDisplayLayout`, this does not look up a saved layout by name - it applies exactly
+   * the output states given in the request body, e.g. from an in-progress edit in the layout editor.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "outputs": [ { "id": "DP-1", "enabled": true, "x": 0, "y": 0, ... } ]
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/display/apply| POST| {"outputs":[]}}
+   */
+  void applyDisplayOutputs(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+
+      std::vector<platf::display_output_t> outputs;
+      for (const auto &output_json : input_tree.value("outputs", nlohmann::json::array())) {
+        outputs.push_back(display_output_from_json(output_json));
+      }
+
+      nlohmann::json output_tree;
+      bool applied = platf::apply_display_outputs(outputs);
+      output_tree["status"] = applied;
+      if (applied) {
+        // See the matching comment in applyDisplayLayout() - keeps an active stream's mouse
+        // coordinate mapping in sync with the newly-applied arrangement.
+        mail::man->event<bool>(mail::refresh_display)->raise(true);
+      }
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "ApplyDisplayOutputs: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Designate a saved layout to be applied automatically on startup and client disconnect,
+   * clearing the designation from every other saved layout. Requires `layout_management_enabled`
+   * to be turned on in the config for the automatic triggers to actually act on this designation.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   * An empty name clears the designation entirely.
+   *
+   * @api_examples{/api/display/layouts/set-restore| POST| {"name":"Docked"}}
+   */
+  void setRestoreDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.value("name", std::string {});
+
+      nlohmann::json output_tree;
+      output_tree["status"] = display_layout::set_restore_layout(name);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SetRestoreDisplayLayout: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Designate a saved layout to be applied automatically when a client connects, clearing
+   * the designation from every other saved layout. Requires `layout_management_enabled` to be
+   * turned on in the config for the automatic trigger to actually act on this designation.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "name": "Layout name"
+   * }
+   * @endcode
+   * An empty name clears the designation entirely.
+   *
+   * @api_examples{/api/display/layouts/set-streaming| POST| {"name":"Dummy only"}}
+   */
+  void setStreamingDisplayLayout(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      nlohmann::json input_tree = nlohmann::json::parse(ss);
+      std::string name = input_tree.value("name", std::string {});
+
+      nlohmann::json output_tree;
+      output_tree["status"] = display_layout::set_streaming_layout(name);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SetStreamingDisplayLayout: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -1797,6 +2235,14 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
+    server.resource["^/api/display/outputs$"]["GET"] = getDisplayOutputs;
+    server.resource["^/api/display/layouts$"]["GET"] = getDisplayLayouts;
+    server.resource["^/api/display/layouts$"]["POST"] = saveDisplayLayout;
+    server.resource["^/api/display/layouts/delete$"]["POST"] = deleteDisplayLayout;
+    server.resource["^/api/display/layouts/apply$"]["POST"] = applyDisplayLayout;
+    server.resource["^/api/display/apply$"]["POST"] = applyDisplayOutputs;
+    server.resource["^/api/display/layouts/set-restore$"]["POST"] = setRestoreDisplayLayout;
+    server.resource["^/api/display/layouts/set-streaming$"]["POST"] = setStreamingDisplayLayout;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
