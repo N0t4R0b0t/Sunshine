@@ -45,6 +45,7 @@
       "external_audio": "disabled",
       "adapter_name": "",
       "output_name": "",
+      "layout_management_enabled": "disabled",
       "dd_configuration_option": "disabled",
       "dd_resolution_option": "auto",
       "dd_manual_resolution": "",
@@ -89,7 +90,8 @@
       "log_path": "",
       "pkey": "",
       "cert": "",
-      "file_state": ""
+      "file_state": "",
+      "file_layouts": ""
     }
   },
   {

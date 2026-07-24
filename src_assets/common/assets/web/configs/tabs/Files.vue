@@ -54,5 +54,12 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.file_state_desc') }}</div>
     </div>
 
+    <!-- Saved Display Layouts File -->
+    <div class="mb-3">
+      <label for="file_layouts" class="form-label">{{ $t('config.file_layouts') }}</label>
+      <input type="text" class="form-control" id="file_layouts" placeholder="layouts.json" v-model="config.file_layouts" />
+      <div class="form-text">{{ $t('config.file_layouts_desc') }}</div>
+    </div>
+
   </div>
 </template>

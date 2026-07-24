@@ -52,6 +52,7 @@ namespace mail {
   MAIL(video_packets);  ///< Video packets.
   MAIL(audio_packets);  ///< Audio packets.
   MAIL(switch_display);  ///< Switch display.
+  MAIL(refresh_display);  ///< Force the active capture display to reinitialize (e.g. after a live layout change) without switching to a different display.
 
   // Local mail
   MAIL(touch_port);  ///< Touch port.
