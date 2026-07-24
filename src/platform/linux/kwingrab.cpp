@@ -813,6 +813,10 @@ namespace kwin {
       }
       devices.clear();
       modes.clear();
+      if (kde_output_device_registry) {
+        kde_output_device_registry_v2_destroy(kde_output_device_registry);
+        kde_output_device_registry = nullptr;
+      }
       if (wl_registry) {
         wl_registry_destroy(wl_registry);
         wl_registry = nullptr;
@@ -844,8 +848,14 @@ namespace kwin {
 
       wl_registry = wl_display_get_registry(wl_display);
       wl_registry_add_listener(wl_registry, &registry_listener, this);
-      wl_display_roundtrip(wl_display);  // bind globals (including per-output kde_output_device_v2 objects)
-      wl_display_roundtrip(wl_display);  // receive per-device property events
+      wl_display_roundtrip(wl_display);  // bind globals (including direct-global kde_output_device_v2 objects, if any)
+      wl_display_roundtrip(wl_display);  // receive per-device property events, and/or the registry wrapper's "output" events
+      if (kde_output_device_registry) {
+        // The registry wrapper's kde_output_device_v2 objects were only just created while
+        // dispatching the previous roundtrip's "output" events - their own property events
+        // haven't been sent yet, so one more roundtrip is needed to receive them.
+        wl_display_roundtrip(wl_display);
+      }
 
       if (!kde_output_management || devices.empty()) {
         BOOST_LOG(warning) << "[kwingrab] kde_output_management_v2/kde_output_device_v2 unavailable "sv
@@ -1160,16 +1170,19 @@ namespace kwin {
     struct wl_registry *wl_registry = nullptr;
     struct kde_output_management_v2 *kde_output_management = nullptr;
     struct kde_output_configuration_v2 *kde_output_configuration = nullptr;
+    struct kde_output_device_registry_v2 *kde_output_device_registry = nullptr;
     std::map<struct kde_output_device_v2 *, kwin_device_state_t> devices;
     std::map<struct kde_output_device_mode_v2 *, kwin_mode_state_t> modes;
     bool apply_done = false;
     bool apply_succeeded = false;
     std::string apply_failure_reason;
 
-    // wl_registry listener. Note: unlike newer plasma-wayland-protocols revisions that route
-    // kde_output_device_v2 discovery through a kde_output_device_registry_v2 wrapper, this
-    // KWin version advertises each kde_output_device_v2 directly as a wl_registry global,
-    // the same way wl_output is bound in screencast_t.
+    // wl_registry listener. Older plasma-wayland-protocols revisions advertised each
+    // kde_output_device_v2 directly as a wl_registry global, the same way wl_output is bound
+    // in screencast_t. Newer revisions (seen on KWin 6.7+) instead route discovery through a
+    // kde_output_device_registry_v2 wrapper global, whose "output" event announces each device -
+    // no direct kde_output_device_v2 globals appear in the registry at all in that case. Both
+    // paths are handled here so this works across KWin versions.
     static void on_registry_global(void *data, struct wl_registry *reg, const uint32_t name, const char *interface, const uint32_t version) {
       auto *self = static_cast<output_management_t *>(data);
       if (!std::strcmp(interface, kde_output_device_v2_interface.name)) {
@@ -1177,8 +1190,7 @@ namespace kwin {
         auto *device = static_cast<struct kde_output_device_v2 *>(
           wl_registry_bind(reg, name, &kde_output_device_v2_interface, bind_ver)
         );
-        self->devices.try_emplace(device);
-        kde_output_device_v2_add_listener(device, &device_listener, self);
+        self->bind_device(device);
         BOOST_LOG(debug) << "[kwingrab] bound kde_output_device_v2 version "sv << bind_ver << " instance: "sv << device;
       } else if (!std::strcmp(interface, kde_output_management_v2_interface.name)) {
         // kde_output_management_v2 has no events (request-only), so unlike kde_output_device_v2
@@ -1188,6 +1200,13 @@ namespace kwin {
           wl_registry_bind(reg, name, &kde_output_management_v2_interface, version)
         );
         BOOST_LOG(debug) << "[kwingrab] bound kde_output_management_v2 version "sv << version;
+      } else if (!std::strcmp(interface, kde_output_device_registry_v2_interface.name)) {
+        uint32_t bind_ver = std::min(version, static_cast<uint32_t>(23));
+        self->kde_output_device_registry = static_cast<struct kde_output_device_registry_v2 *>(
+          wl_registry_bind(reg, name, &kde_output_device_registry_v2_interface, bind_ver)
+        );
+        kde_output_device_registry_v2_add_listener(self->kde_output_device_registry, &device_registry_listener, self);
+        BOOST_LOG(debug) << "[kwingrab] bound kde_output_device_registry_v2 version "sv << bind_ver;
       }
     }
 
@@ -1198,6 +1217,26 @@ namespace kwin {
     static constexpr struct wl_registry_listener registry_listener = {
       .global = on_registry_global,
       .global_remove = on_registry_global_remove,
+    };
+
+    void bind_device(struct kde_output_device_v2 *device) {
+      devices.try_emplace(device);
+      kde_output_device_v2_add_listener(device, &device_listener, this);
+    }
+
+    // kde_output_device_registry_v2 listener - only used on KWin versions that route device
+    // discovery through this wrapper instead of direct wl_registry globals (see on_registry_global).
+    static void on_registry_output(void *data, struct kde_output_device_registry_v2 *registry [[maybe_unused]], struct kde_output_device_v2 *output) {
+      auto *self = static_cast<output_management_t *>(data);
+      self->bind_device(output);
+      BOOST_LOG(debug) << "[kwingrab] bound kde_output_device_v2 via registry wrapper, instance: "sv << output;
+    }
+
+    static void on_registry_finished(void *data [[maybe_unused]], struct kde_output_device_registry_v2 *registry [[maybe_unused]]) {}
+
+    static constexpr struct kde_output_device_registry_v2_listener device_registry_listener = {
+      .finished = on_registry_finished,
+      .output = on_registry_output,
     };
 
     // kde_output_device_v2 listener - bound at v23, so all events must be handled
