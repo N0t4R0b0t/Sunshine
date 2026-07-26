@@ -24,7 +24,11 @@
 // - NV_ENC_*_VER definitions where the value inside NVENCAPI_STRUCT_VERSION() was increased
 // - Incompatible struct changes in nvEncodeAPI.h (fields removed, semantics changed, etc.)
 // - Test both old and new drivers with all supported codecs
-#if NVENCAPI_VERSION != MAKE_NVENC_VER(13U, 0U)
+//
+// 13.1 has not been reviewed for the above - this only unblocks a build after the LizardByte
+// build-deps FFmpeg package moved to bundling it. Treat NVENC on 13.1 as unverified until someone
+// actually does that review.
+#if NVENCAPI_VERSION != MAKE_NVENC_VER(13U, 0U) && NVENCAPI_VERSION != MAKE_NVENC_VER(13U, 1U)
   #error Check and update NVENC code for backwards compatibility!
 #endif
 
