@@ -158,6 +158,7 @@ namespace display_device {
     Point m_position {};  ///< Desired virtual desktop position. Only meaningful if enabled.
     Resolution m_resolution {};  ///< Desired resolution. Only meaningful if enabled.
     Rational m_refresh_rate {};  ///< Desired refresh rate. Only meaningful if enabled.
+    int m_rotation_degrees {0};  ///< Desired clockwise rotation (0, 90, 180, or 270). Only meaningful if enabled.
   };
 
   /**
@@ -185,6 +186,18 @@ namespace display_device {
    * @examples_end
    */
   [[nodiscard]] bool apply_device_mode(const std::string &device_id, const Resolution &resolution, const Rational &refresh_rate);
+
+  /**
+   * @brief Get the current clockwise rotation (0, 90, 180, or 270 degrees) for the given devices.
+   * @param device_ids Devices to query.
+   * @return A map of device ID to rotation degrees. Devices that could not be queried are omitted.
+   *         Empty map if unsupported on this platform or on failure.
+   *
+   * @examples
+   * const auto rotations = get_device_rotations({"{device-id}"});
+   * @examples_end
+   */
+  [[nodiscard]] StringMap<int> get_device_rotations(const std::vector<std::string> &device_ids);
 
   /**
    * @brief A tag structure indicating that configuration parsing has failed.

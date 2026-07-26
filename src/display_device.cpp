@@ -928,12 +928,23 @@ namespace display_device {
 #ifdef _WIN32
     // This is not part of SettingsManagerInterface's persisted/reverted configuration
     // (SingleDisplayConfiguration only targets a single device), so we talk to a fresh
-    // WinDisplayDevice directly rather than routing through DD_DATA.sm_instance.
+    // WinDisplayDevice directly rather than routing through DD_DATA.sm_instance. However, if a
+    // dd_configuration_option apply/retry is already scheduled there, it runs on its own thread
+    // and could otherwise land after this call and silently clobber it - cancel it first so the
+    // two mechanisms can't race.
+    {
+      std::lock_guard lock {DD_DATA.mutex};
+      if (DD_DATA.sm_instance) {
+        DD_DATA.sm_instance->stop();
+      }
+    }
+
     WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
 
     ActiveTopology topology;
     DeviceDisplayModeMap modes;
     StringMap<Point> positions;
+    StringMap<int> rotations;
     std::string primary_device_id;
 
     for (const auto &entry : desired) {
@@ -944,6 +955,7 @@ namespace display_device {
       topology.push_back({entry.m_device_id});
       modes[entry.m_device_id] = DisplayMode {entry.m_resolution, entry.m_refresh_rate};
       positions[entry.m_device_id] = entry.m_position;
+      rotations[entry.m_device_id] = entry.m_rotation_degrees;
 
       if (entry.m_primary) {
         primary_device_id = entry.m_device_id;
@@ -963,6 +975,7 @@ namespace display_device {
 
     bool ok {dd.setDisplayModes(modes)};
     ok = dd.setDevicePositions(positions) && ok;
+    ok = dd.setDeviceRotations(rotations) && ok;
 
     if (!primary_device_id.empty()) {
       ok = dd.setAsPrimary(primary_device_id) && ok;
@@ -977,6 +990,15 @@ namespace display_device {
 
   bool apply_device_mode([[maybe_unused]] const std::string &device_id, [[maybe_unused]] const Resolution &resolution, [[maybe_unused]] const Rational &refresh_rate) {
 #ifdef _WIN32
+    // See apply_device_layout() - cancel any in-flight dd_configuration_option apply/retry first
+    // so it can't race with (and clobber) this synchronous mode change.
+    {
+      std::lock_guard lock {DD_DATA.mutex};
+      if (DD_DATA.sm_instance) {
+        DD_DATA.sm_instance->stop();
+      }
+    }
+
     WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
     return dd.setDisplayModes({
       {device_id, DisplayMode {resolution, refresh_rate}}
@@ -984,6 +1006,21 @@ namespace display_device {
 #else
     // Only implemented on Windows so far.
     return false;
+#endif
+  }
+
+  StringMap<int> get_device_rotations([[maybe_unused]] const std::vector<std::string> &device_ids) {
+#ifdef _WIN32
+    if (device_ids.empty()) {
+      return {};
+    }
+
+    WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
+    const StringSet ids {device_ids.begin(), device_ids.end()};
+    return dd.getCurrentDeviceRotations(ids);
+#else
+    // Only implemented on Windows so far.
+    return {};
 #endif
   }
 
