@@ -16,10 +16,6 @@ const liveAdapters = ref([])
 const liveAdaptersSupported = ref(false)
 
 onMounted(async () => {
-  if (props.platform !== 'linux') {
-    return
-  }
-
   try {
     const response = await apiFetch('./api/adapters')
     if (!response.ok) {
@@ -37,7 +33,7 @@ onMounted(async () => {
 <template>
   <div class="mb-3" v-if="platform !== 'macos'">
     <label for="adapter_name" class="form-label">{{ $t('config.adapter_name') }}</label>
-    <select v-if="platform === 'linux' && liveAdaptersSupported" class="form-select" id="adapter_name"
+    <select v-if="liveAdaptersSupported" class="form-select" id="adapter_name"
             v-model="config.adapter_name">
       <option value="">{{ $t('config.adapter_name_auto') }}</option>
       <option v-for="adapter in liveAdapters" :key="adapter.id" :value="adapter.id">
