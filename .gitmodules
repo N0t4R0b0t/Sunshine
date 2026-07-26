@@ -19,8 +19,8 @@
 	branch = stable
 [submodule "third-party/libdisplaydevice"]
 	path = third-party/libdisplaydevice
-	url = https://github.com/LizardByte/libdisplaydevice.git
-	branch = master
+	url = https://github.com/N0t4R0b0t/libdisplaydevice.git
+	branch = feature/windows-device-positions
 [submodule "third-party/lizardbyte-common"]
 	path = third-party/lizardbyte-common
 	url = https://github.com/LizardByte/lizardbyte-common.git

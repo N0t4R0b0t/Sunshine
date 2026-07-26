@@ -5,6 +5,7 @@
 #define INITGUID
 
 // standard includes
+#include <algorithm>
 #include <format>
 
 // platform includes
@@ -1374,6 +1375,62 @@ namespace platf {
      */
     int init();
   }  // namespace dxgi
+
+  /**
+   * @brief Enumerate the audio sinks available on this system.
+   *
+   * @return Audio sinks, or an empty list if COM/WASAPI enumeration fails.
+   */
+  std::vector<audio_sink_t> enum_audio_sinks() {
+    std::vector<audio_sink_t> sinks;
+
+    audio::co_init_t co_init;
+
+    audio::device_enum_t device_enum;
+    auto status = CoCreateInstance(
+      CLSID_MMDeviceEnumerator,
+      nullptr,
+      CLSCTX_ALL,
+      IID_IMMDeviceEnumerator,
+      (void **) &device_enum
+    );
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "Couldn't create Device Enumerator [0x"sv << util::hex(status).to_string_view() << ']';
+      return sinks;
+    }
+
+    audio::collection_t collection;
+    status = device_enum->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &collection);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "Couldn't enumerate: [0x"sv << util::hex(status).to_string_view() << ']';
+      return sinks;
+    }
+
+    UINT count = 0;
+    collection->GetCount(&count);
+
+    for (UINT x = 0; x < count; ++x) {
+      audio::device_t device;
+      collection->Item(x, &device);
+
+      audio::wstring_t wstring_id;
+      device->GetId(&wstring_id);
+
+      audio::prop_t prop;
+      device->OpenPropertyStore(STGM_READ, &prop);
+
+      audio::prop_var_t device_friendly_name;
+      prop->GetValue(PKEY_Device_FriendlyName, &device_friendly_name.prop);
+
+      audio_sink_t sink;
+      sink.id = utf_utils::to_utf8(wstring_id.get());
+      sink.friendly_name = device_friendly_name.prop.pwszVal ? utf_utils::to_utf8(device_friendly_name.prop.pwszVal) : sink.id;
+      sinks.emplace_back(std::move(sink));
+    }
+
+    std::ranges::sort(sinks, {}, &audio_sink_t::id);
+    return sinks;
+  }
 
   std::unique_ptr<audio_control_t> audio_control() {
     auto control = std::make_unique<audio::audio_control_t>();

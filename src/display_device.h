@@ -149,6 +149,44 @@ namespace display_device {
   [[nodiscard]] EnumeratedDeviceList enumerate_devices();
 
   /**
+   * @brief A single device's desired state for `apply_device_layout()`.
+   */
+  struct DeviceLayoutEntry {
+    std::string m_device_id;  ///< Device to configure.
+    bool m_enabled {false};  ///< Whether the device should be active. Devices not marked enabled are deactivated.
+    bool m_primary {false};  ///< Whether the device should be the primary display.
+    Point m_position {};  ///< Desired virtual desktop position. Only meaningful if enabled.
+    Resolution m_resolution {};  ///< Desired resolution. Only meaningful if enabled.
+    Rational m_refresh_rate {};  ///< Desired refresh rate. Only meaningful if enabled.
+  };
+
+  /**
+   * @brief Apply a full desired arrangement (topology, modes, positions, primary) to the display devices.
+   * Unlike `configure_display()`, this bypasses the persistence/retry machinery and applies synchronously -
+   * intended for user-driven "apply this saved layout" actions rather than session start/stop configuration.
+   * @param desired Every known device's desired state.
+   * @return `true` if the arrangement was applied successfully, `false` if unsupported on this platform or on failure.
+   *
+   * @examples
+   * const auto success = apply_device_layout({ { "{device-id}", true, true, {0, 0}, {1920, 1080}, {60, 1} } });
+   * @examples_end
+   */
+  [[nodiscard]] bool apply_device_layout(const std::vector<DeviceLayoutEntry> &desired);
+
+  /**
+   * @brief Set a single device's resolution/refresh rate, leaving every other device untouched.
+   * @param device_id Device to configure.
+   * @param resolution Desired resolution.
+   * @param refresh_rate Desired refresh rate.
+   * @return `true` if the mode was applied successfully, `false` if unsupported on this platform or on failure.
+   *
+   * @examples
+   * const auto success = apply_device_mode("{device-id}", {1920, 1080}, {60, 1});
+   * @examples_end
+   */
+  [[nodiscard]] bool apply_device_mode(const std::string &device_id, const Resolution &resolution, const Rational &refresh_rate);
+
+  /**
    * @brief A tag structure indicating that configuration parsing has failed.
    */
   struct failed_to_parse_tag_t {};

@@ -1347,6 +1347,8 @@ namespace platf {
   /**
    * @brief Apply a desired arrangement of display outputs to the display server.
    * Currently only supported when the active capture backend is X11.
+   * @param desired The desired output states, typically from a saved layout.
+   * @return `true` if the arrangement was applied successfully, `false` if unsupported or on failure.
    */
   bool apply_display_outputs(const std::vector<platf::display_output_t> &desired) {
 #ifdef SUNSHINE_BUILD_X11

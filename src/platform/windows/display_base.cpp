@@ -3,6 +3,7 @@
  * @brief Definitions for the Windows display base code.
  */
 // standard includes
+#include <algorithm>
 #include <cmath>
 #include <thread>
 
@@ -1118,50 +1119,131 @@ namespace platf {
   }
 
   /**
+   * @brief Convert a libdisplaydevice `FloatingPoint` (double or Rational) to a plain double.
+   * @param fp The value to convert.
+   * @return The value as a double.
+   */
+  double floating_point_to_double(const display_device::FloatingPoint &fp) {
+    if (const auto *value = std::get_if<double>(&fp)) {
+      return *value;
+    }
+
+    const auto &rational = std::get<display_device::Rational>(fp);
+    return rational.m_denominator ? static_cast<double>(rational.m_numerator) / rational.m_denominator : 0.0;
+  }
+
+  /**
+   * @brief Convert a plain double refresh rate to a libdisplaydevice `Rational` (millihertz precision).
+   * @param value The refresh rate to convert, in Hz.
+   * @return The value as a `Rational` with a denominator of 1000.
+   */
+  display_device::Rational double_to_rational(double value) {
+    return {static_cast<unsigned int>(std::llround(value * 1000.0)), 1000};
+  }
+
+  /**
    * @brief Enumerate the live state of every known display output.
    *
-   * @return Always empty - saved-layout enumeration/apply is only implemented on Linux (X11/KWin)
-   *         so far. Windows already has its own, more capable display device system (see
-   *         src/display_device.cpp / libdisplaydevice).
+   * @return Display outputs, or an empty list if the display device backend is unavailable.
    */
   std::vector<display_output_t> enum_display_outputs() {
-    return {};
+    std::vector<display_output_t> outputs;
+
+    for (const auto &device : display_device::enumerate_devices()) {
+      display_output_t output;
+      output.id = device.m_device_id;
+      output.friendly_name = device.m_friendly_name;
+      output.connected = device.m_info.has_value();
+      output.enabled = device.m_info.has_value();
+
+      if (device.m_info) {
+        output.primary = device.m_info->m_primary;
+        output.x = device.m_info->m_origin_point.m_x;
+        output.y = device.m_info->m_origin_point.m_y;
+        output.width = static_cast<int>(device.m_info->m_resolution.m_width);
+        output.height = static_cast<int>(device.m_info->m_resolution.m_height);
+        output.refresh_rate = floating_point_to_double(device.m_info->m_refresh_rate);
+      }
+
+      // Rotation is not exposed by libdisplaydevice's public API on Windows; left at 0 (unsupported).
+      outputs.emplace_back(std::move(output));
+    }
+
+    return outputs;
   }
 
   /**
    * @brief Apply a desired arrangement of display outputs.
    *
-   * @return Always `false` - see `enum_display_outputs()`.
+   * @return `true` if the arrangement was applied successfully, `false` if unsupported or on failure.
+   * @note Rotation is not applied - it is not exposed by libdisplaydevice's public API on Windows.
    */
-  bool apply_display_outputs(const std::vector<display_output_t> &) {
-    return false;
+  bool apply_display_outputs(const std::vector<display_output_t> &desired) {
+    std::vector<display_device::DeviceLayoutEntry> entries;
+    entries.reserve(desired.size());
+
+    for (const auto &output : desired) {
+      display_device::DeviceLayoutEntry entry;
+      entry.m_device_id = output.id;
+      entry.m_enabled = output.enabled;
+      entry.m_primary = output.primary;
+      entry.m_position = {output.x, output.y};
+      entry.m_resolution = {static_cast<unsigned int>(output.width), static_cast<unsigned int>(output.height)};
+      entry.m_refresh_rate = double_to_rational(output.refresh_rate);
+      entries.emplace_back(std::move(entry));
+    }
+
+    return display_device::apply_device_layout(entries);
   }
 
   /**
    * @brief Set a display output to a specific resolution/refresh rate.
    *
-   * @return Always `false` - see `enum_display_outputs()`.
+   * @return `true` if the mode was applied successfully, `false` if unsupported or on failure.
    */
-  bool set_display_resolution(const std::string &, int, int, double) {
-    return false;
+  bool set_display_resolution(const std::string &output_id, int width, int height, double refresh_rate) {
+    return display_device::apply_device_mode(
+      output_id,
+      {static_cast<unsigned int>(width), static_cast<unsigned int>(height)},
+      double_to_rational(refresh_rate)
+    );
   }
 
   /**
    * @brief Enumerate the render adapters available on this system.
    *
-   * @return Always empty - live adapter enumeration is only implemented on Linux so far.
+   * @return Render adapters, or an empty list if DXGI factory creation fails.
    */
   std::vector<render_adapter_t> enum_render_adapters() {
-    return {};
-  }
+    std::vector<render_adapter_t> adapters;
 
-  /**
-   * @brief Enumerate the audio sinks available on this system.
-   *
-   * @return Always empty - live audio sink enumeration is only implemented on Linux so far.
-   */
-  std::vector<audio_sink_t> enum_audio_sinks() {
-    return {};
+    dxgi::factory1_t factory;
+    HRESULT status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
+      return adapters;
+    }
+
+    dxgi::adapter_t::pointer adapter_p;
+    for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      dxgi::adapter_t adapter {adapter_p};
+
+      DXGI_ADAPTER_DESC1 adapter_desc;
+      adapter->GetDesc1(&adapter_desc);
+
+      // Skip software rasterizer adapters - they can't be selected for capture/encode.
+      if (adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+        continue;
+      }
+
+      render_adapter_t adapter_out;
+      adapter_out.id = utf_utils::to_utf8(adapter_desc.Description);
+      adapter_out.friendly_name = adapter_out.id;
+      adapters.emplace_back(std::move(adapter_out));
+    }
+
+    std::ranges::sort(adapters, {}, &render_adapter_t::id);
+    return adapters;
   }
 
   /**

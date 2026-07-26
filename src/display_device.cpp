@@ -924,6 +924,69 @@ namespace display_device {
     });
   }
 
+  bool apply_device_layout([[maybe_unused]] const std::vector<DeviceLayoutEntry> &desired) {
+#ifdef _WIN32
+    // This is not part of SettingsManagerInterface's persisted/reverted configuration
+    // (SingleDisplayConfiguration only targets a single device), so we talk to a fresh
+    // WinDisplayDevice directly rather than routing through DD_DATA.sm_instance.
+    WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
+
+    ActiveTopology topology;
+    DeviceDisplayModeMap modes;
+    StringMap<Point> positions;
+    std::string primary_device_id;
+
+    for (const auto &entry : desired) {
+      if (!entry.m_enabled) {
+        continue;
+      }
+
+      topology.push_back({entry.m_device_id});
+      modes[entry.m_device_id] = DisplayMode {entry.m_resolution, entry.m_refresh_rate};
+      positions[entry.m_device_id] = entry.m_position;
+
+      if (entry.m_primary) {
+        primary_device_id = entry.m_device_id;
+      }
+    }
+
+    if (topology.empty()) {
+      BOOST_LOG(warning) << "apply_device_layout(): desired layout has no enabled devices";
+      return false;
+    }
+
+    // Devices left out of the topology are implicitly deactivated by setTopology().
+    if (!dd.setTopology(topology)) {
+      BOOST_LOG(error) << "apply_device_layout(): failed to set topology";
+      return false;
+    }
+
+    bool ok {dd.setDisplayModes(modes)};
+    ok = dd.setDevicePositions(positions) && ok;
+
+    if (!primary_device_id.empty()) {
+      ok = dd.setAsPrimary(primary_device_id) && ok;
+    }
+
+    return ok;
+#else
+    // Only implemented on Windows so far.
+    return false;
+#endif
+  }
+
+  bool apply_device_mode([[maybe_unused]] const std::string &device_id, [[maybe_unused]] const Resolution &resolution, [[maybe_unused]] const Rational &refresh_rate) {
+#ifdef _WIN32
+    WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
+    return dd.setDisplayModes({
+      {device_id, DisplayMode {resolution, refresh_rate}}
+    });
+#else
+    // Only implemented on Windows so far.
+    return false;
+#endif
+  }
+
   std::variant<failed_to_parse_tag_t, configuration_disabled_tag_t, SingleDisplayConfiguration> parse_configuration(const config::video_t &video_config, const rtsp_stream::launch_session_t &session) {
     const auto device_prep {parse_device_prep_option(video_config)};
     if (!device_prep) {

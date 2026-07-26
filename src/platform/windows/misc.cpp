@@ -131,6 +131,7 @@ namespace platf {
 
   bool enabled_mouse_keys = false;  ///< Tracks whether Windows Mouse Keys was enabled before Sunshine changed it.
   MOUSEKEYS previous_mouse_keys_state;  ///< Previous mouse keys state.
+  bool idle_inhibited = false;  ///< Tracks whether the display/system idle timeout is currently suppressed.
 
   HANDLE qos_handle = nullptr;  ///< QoS handle.
 
@@ -1226,6 +1227,13 @@ namespace platf {
       }
     }
     enable_mouse_keys();
+
+    // Prevent the display and system from idling/sleeping while streaming.
+    if (SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)) {
+      idle_inhibited = true;
+    } else {
+      BOOST_LOG(warning) << "Unable to inhibit display/system idle: "sv << GetLastError();
+    }
   }
 
   void enable_mouse_keys() {
@@ -1287,6 +1295,12 @@ namespace platf {
         auto winerr = GetLastError();
         BOOST_LOG(warning) << "Unable to restore original state of Mouse Keys: "sv << winerr;
       }
+    }
+
+    // Allow the display/system to idle/sleep again.
+    if (idle_inhibited) {
+      idle_inhibited = false;
+      SetThreadExecutionState(ES_CONTINUOUS);
     }
   }
 
