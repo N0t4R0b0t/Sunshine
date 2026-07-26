@@ -61,3 +61,4 @@ junit.xml
 *.pyc
 .venv/
 venv/
+winbuild/
