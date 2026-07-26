@@ -15,8 +15,8 @@
 	url = https://github.com/Dav1dde/glad.git
 [submodule "third-party/libdisplaydevice"]
 	path = third-party/libdisplaydevice
-	url = https://github.com/LizardByte/libdisplaydevice.git
-	branch = master
+	url = https://github.com/N0t4R0b0t/libdisplaydevice.git
+	branch = feature/windows-device-positions
 [submodule "third-party/libvirtualhid"]
 	path = third-party/libvirtualhid
 	url = https://github.com/LizardByte/libvirtualhid.git
