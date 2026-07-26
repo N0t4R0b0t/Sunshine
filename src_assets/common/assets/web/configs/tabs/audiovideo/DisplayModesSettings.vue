@@ -36,8 +36,9 @@ const forceVideoOutputFpsEnabled = computed({
     <div class="form-text">{{ $t("config.minimum_fps_target_desc") }}</div>
   </div>
 
-  <!--force_video_output_fps-->
-  <div class="mb-3">
+  <!--force_video_output_fps: Windows already offers an equivalent framerate override via its
+      own display settings, so this option is only surfaced on platforms that lack that.-->
+  <div class="mb-3" v-if="platform !== 'windows'">
     <Checkbox
       id="force_video_output_fps_enabled"
       locale-prefix="config"

@@ -1193,12 +1193,16 @@ namespace rtsp_stream {
           config.monitor.framerateX100 = 0;
         }
       }
+#if defined(__linux__) || defined(linux) || defined(__linux) || defined(__FreeBSD__)
+      // Windows already offers an equivalent framerate override via its own display settings,
+      // so this option is only surfaced/applied on platforms that lack that.
       if (config::video.force_video_output_fps > 0 && config.monitor.framerate != config::video.force_video_output_fps) {
         BOOST_LOG(info) << "Overriding client-requested framerate "sv << config.monitor.framerate
                          << " with force_video_output_fps "sv << config::video.force_video_output_fps;
         config.monitor.framerate = config::video.force_video_output_fps;
         config.monitor.framerateX100 = config::video.force_video_output_fps * 100;
       }
+#endif
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
