@@ -1148,8 +1148,19 @@ namespace platf {
    */
   std::vector<display_output_t> enum_display_outputs() {
     std::vector<display_output_t> outputs;
+    auto devices = display_device::enumerate_devices();
 
-    for (const auto &device : display_device::enumerate_devices()) {
+    // getCurrentDeviceRotations() only works for active devices - asking about an inactive one
+    // fails the whole batch, so only ask about the connected ones.
+    std::vector<std::string> connected_ids;
+    for (const auto &device : devices) {
+      if (device.m_info) {
+        connected_ids.push_back(device.m_device_id);
+      }
+    }
+    auto rotations = display_device::get_device_rotations(connected_ids);
+
+    for (auto &device : devices) {
       display_output_t output;
       output.id = device.m_device_id;
       output.friendly_name = device.m_friendly_name;
@@ -1163,9 +1174,12 @@ namespace platf {
         output.width = static_cast<int>(device.m_info->m_resolution.m_width);
         output.height = static_cast<int>(device.m_info->m_resolution.m_height);
         output.refresh_rate = floating_point_to_double(device.m_info->m_refresh_rate);
+
+        if (auto it = rotations.find(device.m_device_id); it != rotations.end()) {
+          output.rotation = it->second;
+        }
       }
 
-      // Rotation is not exposed by libdisplaydevice's public API on Windows; left at 0 (unsupported).
       outputs.emplace_back(std::move(output));
     }
 
@@ -1176,7 +1190,6 @@ namespace platf {
    * @brief Apply a desired arrangement of display outputs.
    *
    * @return `true` if the arrangement was applied successfully, `false` if unsupported or on failure.
-   * @note Rotation is not applied - it is not exposed by libdisplaydevice's public API on Windows.
    */
   bool apply_display_outputs(const std::vector<display_output_t> &desired) {
     std::vector<display_device::DeviceLayoutEntry> entries;
@@ -1190,6 +1203,7 @@ namespace platf {
       entry.m_position = {output.x, output.y};
       entry.m_resolution = {static_cast<unsigned int>(output.width), static_cast<unsigned int>(output.height)};
       entry.m_refresh_rate = double_to_rational(output.refresh_rate);
+      entry.m_rotation_degrees = output.rotation;
       entries.emplace_back(std::move(entry));
     }
 
