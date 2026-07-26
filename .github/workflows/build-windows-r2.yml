@@ -1,0 +1,246 @@
+---
+name: Build Windows (manual, R2 delivery)
+
+permissions: {}
+
+# Manual-trigger Windows build for validating in-progress work (currently feature/windows-support)
+# that packages the result and uploads it to Cloudflare R2 for easy pickup, without needing a
+# tagged release or touching the normal ci.yml/ci-windows.yml release pipeline.
+#
+# This is a slimmed-down version of ci-windows.yml: no code-signing, no test run, no debug-info
+# packaging, no ARM64 leg - just build, package, and ship the artifacts to R2 so they accumulate
+# under a per-run path.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch/ref to build'
+        required: false
+        type: string
+        default: 'feature/windows-support'
+
+jobs:
+  build_windows:
+    name: Windows-AMD64
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    permissions:
+      contents: read
+    env:
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
+    steps:
+      - name: Validate R2 configuration
+        shell: pwsh
+        run: |
+          if (-not $env:R2_BUCKET -or -not $env:R2_ENDPOINT) {
+            Write-Error "vars.R2_BUCKET and vars.R2_ENDPOINT must be set in this repository's Actions settings."
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: recursive
+
+      - name: Setup Dependencies Windows
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2.32.0
+        with:
+          msystem: ucrt64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-graphviz
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-nsis
+
+      - name: Install Doxygen
+        # GCC compiled doxygen has issues when running graphviz
+        env:
+          DOXYGEN_VERSION: "1.11.0"
+        shell: pwsh
+        run: |
+          $doxy_ver = $env:DOXYGEN_VERSION
+          $_doxy_ver = $doxy_ver.Replace(".", "_")
+
+          Invoke-WebRequest -Uri `
+            "https://github.com/doxygen/doxygen/releases/download/Release_${_doxy_ver}/doxygen-${doxy_ver}-setup.exe" `
+            -OutFile "doxygen-setup.exe"
+
+          Start-Process `
+            -FilePath .\doxygen-setup.exe `
+            -ArgumentList '/VERYSILENT' `
+            -Wait `
+            -NoNewWindow
+
+          Remove-Item -Path doxygen-setup.exe
+
+      - name: Setup dotnet  # needed for wix
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          dotnet-version: '10.x'
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 'lts/*'
+
+      - name: NodeJS Path
+        shell: pwsh
+        run: |
+          $NODEJS_BINARY_PATH = (Get-Command node).Source
+          $NODEJS_PATH = Split-Path -Path "$NODEJS_BINARY_PATH" -Parent
+          echo "NODEJS_PATH=$NODEJS_PATH" >> $env:GITHUB_ENV
+
+      - name: Setup python
+        id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Sync Python tools
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          UV_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          uv sync --locked \
+            --no-python-downloads \
+            --no-install-project
+
+      - name: Build Windows
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          BRANCH: ${{ inputs.ref }}
+        run: |
+          NODEJS_PATH=$(cygpath "$NODEJS_PATH")
+          export PATH="$PATH:$NODEJS_PATH"
+
+          mkdir -p build
+          cmake \
+            -B build \
+            -G Ninja \
+            -S . \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DSUNSHINE_ASSETS_DIR=assets \
+            -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
+            -DSUNSHINE_PUBLISHER_WEBSITE="https://app.lizardbyte.dev" \
+            -DSUNSHINE_PUBLISHER_ISSUE_URL="https://app.lizardbyte.dev/support"
+          ninja -C build
+
+      - name: Check Windows linkage
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+
+          binaries=(
+            build/sunshine.exe
+            build/tools/audio-info.exe
+            build/tools/dxgi-info.exe
+            build/tools/sunshinesvc.exe
+          )
+
+          unexpected_deps=""
+          for binary in "${binaries[@]}"; do
+            [[ -f "${binary}" ]] || continue
+            linkage="$(ldd "${binary}")"
+            echo "::group::ldd ${binary}"
+            echo "${linkage}"
+            echo "::endgroup::"
+
+            unexpected_for_binary="$(awk '
+              BEGIN { IGNORECASE = 1 }
+              $1 == "zlib1.dll" { next }
+              $1 ~ /^minhook-detours\..*\.dll$/ { next }
+              $1 ~ /^api-ms-win-/ { next }
+              $1 ~ /^ext-ms-win-/ { next }
+              $0 ~ /=>[[:space:]]+not found/ { print }
+              $0 ~ /=>[[:space:]]+\/(clangarm64|clang64|mingw32|mingw64|ucrt64)\/bin\// { print }
+            ' <<< "${linkage}")"
+
+            if [[ -n "${unexpected_for_binary}" ]]; then
+              unexpected_deps="${unexpected_deps}"$'\n'"${binary}:"$'\n'"${unexpected_for_binary}"
+            fi
+          done
+
+          if [[ -n "${unexpected_deps}" ]]; then
+            echo "Unexpected non-packaged runtime dependencies were found:"
+            echo "${unexpected_deps}"
+            exit 1
+          fi
+
+      - name: Package Windows
+        shell: msys2 {0}
+        run: |
+          mkdir -p artifacts
+          cd build
+          cpack -G WIX
+          cpack -G ZIP
+          mv ./cpack_artifacts/Sunshine.msi ../artifacts/Sunshine-installer.msi
+          mv ./cpack_artifacts/Sunshine.zip ../artifacts/Sunshine-lite.zip
+
+      - name: Debug wix
+        if: always()
+        shell: msys2 {0}
+        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
+
+      - name: Compute R2 destination
+        id: dest
+        shell: pwsh
+        run: |
+          $branch = "${{ inputs.ref }}" -replace '[^a-zA-Z0-9._-]', '-'
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $shortSha = "${{ github.sha }}".Substring(0, 8)
+          $dest = "windows-builds/$branch/$timestamp-$shortSha"
+          echo "dest=$dest" >> $env:GITHUB_OUTPUT
+
+      - name: Upload to R2
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          DEST: ${{ steps.dest.outputs.dest }}
+        run: |
+          aws s3 cp artifacts/Sunshine-installer.msi "s3://$env:R2_BUCKET/$env:DEST/Sunshine-installer.msi" --endpoint-url $env:R2_ENDPOINT
+          aws s3 cp artifacts/Sunshine-lite.zip "s3://$env:R2_BUCKET/$env:DEST/Sunshine-lite.zip" --endpoint-url $env:R2_ENDPOINT
+
+      - name: Summary
+        shell: pwsh
+        env:
+          DEST: ${{ steps.dest.outputs.dest }}
+        run: |
+          "### Windows build uploaded to R2 :package:" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Destination: ``s3://$env:R2_BUCKET/$env:DEST/``" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Files:" >> $env:GITHUB_STEP_SUMMARY
+          "- Sunshine-installer.msi" >> $env:GITHUB_STEP_SUMMARY
+          "- Sunshine-lite.zip" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Artifacts (GitHub, fallback)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: build-Windows-AMD64
+          path: artifacts/
+          if-no-files-found: error
