@@ -15,10 +15,6 @@ const liveSinks = ref([])
 const liveSinksSupported = ref(false)
 
 onMounted(async () => {
-  if (props.platform !== 'linux') {
-    return
-  }
-
   try {
     const response = await apiFetch('./api/audio-sinks')
     if (!response.ok) {
@@ -36,7 +32,7 @@ onMounted(async () => {
 <template>
   <div class="mb-3">
     <label for="audio_sink" class="form-label">{{ $t('config.audio_sink') }}</label>
-    <select v-if="platform === 'linux' && liveSinksSupported" class="form-select" id="audio_sink"
+    <select v-if="liveSinksSupported" class="form-select" id="audio_sink"
             v-model="config.audio_sink">
       <option value="">{{ $t('config.audio_sink_auto') }}</option>
       <option v-for="sink in liveSinks" :key="sink.id" :value="sink.id">
