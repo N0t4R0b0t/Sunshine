@@ -22,10 +22,6 @@ const liveOutputs = ref([])
 const liveOutputsSupported = ref(false)
 
 onMounted(async () => {
-  if (props.platform !== 'linux') {
-    return
-  }
-
   try {
     const response = await apiFetch('./api/display/outputs')
     if (!response.ok) {
@@ -43,7 +39,7 @@ onMounted(async () => {
 <template>
   <div class="mb-3">
     <label for="output_name" class="form-label">{{ $t('config.output_name') }}</label>
-    <select v-if="platform === 'linux' && liveOutputsSupported" class="form-select" id="output_name"
+    <select v-if="liveOutputsSupported" class="form-select" id="output_name"
             v-model="config.output_name">
       <option value="">{{ $t('config.output_name_auto') }}</option>
       <option v-for="output in liveOutputs" :key="output.id" :value="output.id">
