@@ -82,6 +82,11 @@ function startDrag(output, event) {
     startClientY: event.clientY,
     startX: output.x,
     startY: output.y,
+    // Fixed for the whole drag - converting the live pointer delta must use the scale that was
+    // in effect when the drag started, not the one recomputeCanvasBounds() keeps updating below,
+    // or the two would feed back into each other (rescaling changes the delta, which moves the
+    // output further, which rescales again) and the drag would run away from the cursor.
+    scale: canvasScale.value,
   }
   window.addEventListener('pointermove', onDrag)
   window.addEventListener('pointerup', endDrag)
@@ -91,10 +96,15 @@ function onDrag(event) {
   if (!dragState) {
     return
   }
-  const dx = (event.clientX - dragState.startClientX) / canvasScale.value
-  const dy = (event.clientY - dragState.startClientY) / canvasScale.value
+  const dx = (event.clientX - dragState.startClientX) / dragState.scale
+  const dy = (event.clientY - dragState.startClientY) / dragState.scale
   dragState.output.x = Math.round(dragState.startX + dx)
   dragState.output.y = Math.round(dragState.startY + dy)
+
+  // Rescale/pan the canvas live as the drag moves the bounding box, instead of only at
+  // endDrag() - recomputing just once on release meant the whole canvas could jump/rescale in a
+  // single frame after a long drag, making other outputs appear to vanish or collapse together.
+  recomputeCanvasBounds()
 }
 
 function snapOutput(output) {
@@ -146,8 +156,32 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', endDrag)
 })
 
+// Used when enabling a previously-disabled output that has no known geometry (0x0) - without
+// this it renders/behaves as a zero-size point, collapsing onto whatever else is at its last
+// known position and leaving nothing but the power button visible/clickable.
+const DEFAULT_ENABLED_WIDTH = 1920
+const DEFAULT_ENABLED_HEIGHT = 1080
+
 function toggleEnabled(output) {
   output.enabled = !output.enabled
+
+  if (output.enabled && (!output.width || !output.height)) {
+    output.width = DEFAULT_ENABLED_WIDTH
+    output.height = DEFAULT_ENABLED_HEIGHT
+
+    // Place it just to the right of the current layout instead of leaving it wherever a
+    // disabled output's last known (often (0,0)) position was, which would otherwise overlap
+    // whatever else already occupies that spot.
+    const others = editableOutputs.value.filter((o) => o !== output && o.enabled)
+    if (others.length > 0) {
+      output.x = Math.max(...others.map((o) => o.x + effectiveSize(o).width))
+      output.y = 0
+    } else {
+      output.x = 0
+      output.y = 0
+    }
+  }
+
   recomputeCanvasBounds()
 }
 
