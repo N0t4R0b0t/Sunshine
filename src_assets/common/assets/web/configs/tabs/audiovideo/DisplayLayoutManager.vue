@@ -30,8 +30,11 @@ function effectiveSize(output) {
 }
 
 function recomputeCanvasBounds() {
-  const enabled = editableOutputs.value.filter((o) => o.enabled)
-  if (enabled.length === 0) {
+  // Includes disabled outputs too (not just enabled) - they're staged to the side by
+  // layoutDisabledOutputs() and need to stay within the visible canvas bounds, not just the
+  // active layout's bounding box.
+  const outputs = editableOutputs.value
+  if (outputs.length === 0) {
     canvasScale.value = 1
     canvasOffset.x = 0
     canvasOffset.y = 0
@@ -39,7 +42,7 @@ function recomputeCanvasBounds() {
   }
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const o of enabled) {
+  for (const o of outputs) {
     const { width, height } = effectiveSize(o)
     minX = Math.min(minX, o.x)
     minY = Math.min(minY, o.y)
@@ -109,7 +112,9 @@ function onDrag(event) {
 
 function snapOutput(output) {
   const { width, height } = effectiveSize(output)
-  const others = editableOutputs.value.filter((o) => o !== output && o.enabled)
+  // Snaps against every other output, not just enabled ones, so disabled outputs staged
+  // side by side line up neatly against each other too.
+  const others = editableOutputs.value.filter((o) => o !== output)
 
   let bestX = null, bestXDist = SNAP_THRESHOLD
   let bestY = null, bestYDist = SNAP_THRESHOLD
@@ -156,32 +161,42 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', endDrag)
 })
 
-// Used when enabling a previously-disabled output that has no known geometry (0x0) - without
-// this it renders/behaves as a zero-size point, collapsing onto whatever else is at its last
-// known position and leaving nothing but the power button visible/clickable.
+// A disabled output has no known geometry (0x0) - without a stand-in size/position it renders
+// as a degenerate point that only the power button's hit area covers, and would otherwise
+// overlap whatever else sits at its last known (often (0,0)) position.
 const DEFAULT_ENABLED_WIDTH = 1920
 const DEFAULT_ENABLED_HEIGHT = 1080
 
-function toggleEnabled(output) {
-  output.enabled = !output.enabled
-
-  if (output.enabled && (!output.width || !output.height)) {
-    output.width = DEFAULT_ENABLED_WIDTH
-    output.height = DEFAULT_ENABLED_HEIGHT
-
-    // Place it just to the right of the current layout instead of leaving it wherever a
-    // disabled output's last known (often (0,0)) position was, which would otherwise overlap
-    // whatever else already occupies that spot.
-    const others = editableOutputs.value.filter((o) => o !== output && o.enabled)
-    if (others.length > 0) {
-      output.x = Math.max(...others.map((o) => o.x + effectiveSize(o).width))
-      output.y = 0
-    } else {
-      output.x = 0
-      output.y = 0
-    }
+// Arranges every disabled output in a non-overlapping row beside the active layout: sized at a
+// sane 1080p-proportioned default (unless it already has a known size), positioned side by side
+// to the right of the enabled outputs' bounding box. Re-run on load and on every enable/disable
+// so the staging row always reflects the current set of disabled outputs.
+function layoutDisabledOutputs() {
+  const enabledOutputs = editableOutputs.value.filter((o) => o.enabled)
+  const disabledOutputs = editableOutputs.value.filter((o) => !o.enabled)
+  if (disabledOutputs.length === 0) {
+    return
   }
 
+  let nextX = 0
+  if (enabledOutputs.length > 0) {
+    nextX = Math.max(...enabledOutputs.map((o) => o.x + effectiveSize(o).width))
+  }
+
+  for (const output of disabledOutputs) {
+    if (!output.width || !output.height) {
+      output.width = DEFAULT_ENABLED_WIDTH
+      output.height = DEFAULT_ENABLED_HEIGHT
+    }
+    output.x = nextX
+    output.y = 0
+    nextX += effectiveSize(output).width
+  }
+}
+
+function toggleEnabled(output) {
+  output.enabled = !output.enabled
+  layoutDisabledOutputs()
   recomputeCanvasBounds()
 }
 
@@ -201,6 +216,7 @@ async function loadEditableOutputs() {
   if (response.ok) {
     const data = await response.json()
     editableOutputs.value = (data.outputs || []).map((o) => ({ ...o }))
+    layoutDisabledOutputs()
     recomputeCanvasBounds()
   }
 }
