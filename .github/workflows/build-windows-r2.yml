@@ -229,14 +229,23 @@ jobs:
         shell: pwsh
         env:
           DEST: ${{ steps.dest.outputs.dest }}
+          R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
         run: |
           "### Windows build uploaded to R2 :package:" >> $env:GITHUB_STEP_SUMMARY
           "" >> $env:GITHUB_STEP_SUMMARY
-          "Destination: ``s3://$env:R2_BUCKET/$env:DEST/``" >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          "Files:" >> $env:GITHUB_STEP_SUMMARY
-          "- Sunshine-installer.msi" >> $env:GITHUB_STEP_SUMMARY
-          "- Sunshine-lite.zip" >> $env:GITHUB_STEP_SUMMARY
+          if ($env:R2_PUBLIC_URL) {
+            "Download:" >> $env:GITHUB_STEP_SUMMARY
+            "- [Sunshine-installer.msi]($env:R2_PUBLIC_URL/$env:DEST/Sunshine-installer.msi)" >> $env:GITHUB_STEP_SUMMARY
+            "- [Sunshine-lite.zip]($env:R2_PUBLIC_URL/$env:DEST/Sunshine-lite.zip)" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "Destination: ``s3://$env:R2_BUCKET/$env:DEST/``" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "Files:" >> $env:GITHUB_STEP_SUMMARY
+            "- Sunshine-installer.msi" >> $env:GITHUB_STEP_SUMMARY
+            "- Sunshine-lite.zip" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "(Set ``vars.R2_PUBLIC_URL`` to get direct download links here instead of an s3:// URI.)" >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Upload Artifacts (GitHub, fallback)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
