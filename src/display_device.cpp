@@ -953,7 +953,14 @@ namespace display_device {
       }
 
       topology.push_back({entry.m_device_id});
-      modes[entry.m_device_id] = DisplayMode {entry.m_resolution, entry.m_refresh_rate};
+
+      // A 0x0 resolution means we never actually observed a mode for this device (e.g. it was
+      // captured into the saved layout while disabled). Activate it via the topology but leave
+      // the mode alone rather than asking Windows to set a literal 0x0 - it will keep/pick
+      // whatever mode it already has for the newly-activated device.
+      if (entry.m_resolution.m_width > 0 && entry.m_resolution.m_height > 0) {
+        modes[entry.m_device_id] = DisplayMode {entry.m_resolution, entry.m_refresh_rate};
+      }
       positions[entry.m_device_id] = entry.m_position;
       rotations[entry.m_device_id] = entry.m_rotation_degrees;
 
@@ -973,7 +980,9 @@ namespace display_device {
       return false;
     }
 
-    bool ok {dd.setDisplayModes(modes)};
+    // modes can legitimately be empty if every enabled device had an unknown (0x0) resolution -
+    // setDisplayModes() treats an empty map as an error, so only call it when there's real work.
+    bool ok {modes.empty() || dd.setDisplayModes(modes)};
     ok = dd.setDevicePositions(positions) && ok;
     ok = dd.setDeviceRotations(rotations) && ok;
 
