@@ -246,7 +246,63 @@ async function checkSupported() {
   }
 }
 
+// Windows' SetDisplayConfig rejects layouts where enabled outputs overlap or aren't all
+// touching (a "floating" output with a gap) with an opaque ERROR_INVALID_PARAMETER - mirrors the
+// same check the backend does, so the UI can give a specific reason instead of a generic
+// "failed to apply" after a round trip. X11/KWin doesn't have this restriction, so only checked
+// on Windows.
+function findLayoutGeometryError() {
+  const enabledOutputs = editableOutputs.value.filter((o) => o.enabled)
+
+  for (let i = 0; i < enabledOutputs.length; i++) {
+    const a = enabledOutputs[i]
+    const aSize = effectiveSize(a)
+    for (let j = i + 1; j < enabledOutputs.length; j++) {
+      const b = enabledOutputs[j]
+      const bSize = effectiveSize(b)
+      const overlap = a.x < b.x + bSize.width && b.x < a.x + aSize.width &&
+                       a.y < b.y + bSize.height && b.y < a.y + aSize.height
+      if (overlap) {
+        return 'config.display_layout_invalid_overlap'
+      }
+    }
+  }
+
+  if (enabledOutputs.length <= 1) {
+    return null
+  }
+
+  const touches = (a, b) => {
+    const aSize = effectiveSize(a)
+    const bSize = effectiveSize(b)
+    return a.x <= b.x + bSize.width && b.x <= a.x + aSize.width &&
+           a.y <= b.y + bSize.height && b.y <= a.y + aSize.height
+  }
+
+  const visited = new Set([enabledOutputs[0]])
+  const stack = [enabledOutputs[0]]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    for (const candidate of enabledOutputs) {
+      if (!visited.has(candidate) && touches(current, candidate)) {
+        visited.add(candidate)
+        stack.push(candidate)
+      }
+    }
+  }
+
+  return visited.size === enabledOutputs.length ? null : 'config.display_layout_invalid_disconnected'
+}
+
 async function applyNow() {
+  if (props.platform === 'windows') {
+    const errorKey = findLayoutGeometryError()
+    if (errorKey) {
+      notifyKey.error(errorKey)
+      return
+    }
+  }
+
   const response = await apiFetch('./api/display/apply', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
