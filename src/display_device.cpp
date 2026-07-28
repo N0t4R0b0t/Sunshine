@@ -924,6 +924,85 @@ namespace display_device {
     });
   }
 
+#ifdef _WIN32
+  namespace {
+    /**
+     * @brief Check whether two enabled layout entries' rectangles overlap (non-zero shared area).
+     */
+    bool entriesOverlap(const DeviceLayoutEntry &a, const DeviceLayoutEntry &b) {
+      const int a_right = a.m_position.m_x + static_cast<int>(a.m_resolution.m_width);
+      const int b_right = b.m_position.m_x + static_cast<int>(b.m_resolution.m_width);
+      const int a_bottom = a.m_position.m_y + static_cast<int>(a.m_resolution.m_height);
+      const int b_bottom = b.m_position.m_y + static_cast<int>(b.m_resolution.m_height);
+      return a.m_position.m_x < b_right && b.m_position.m_x < a_right &&
+             a.m_position.m_y < b_bottom && b.m_position.m_y < a_bottom;
+    }
+
+    /**
+     * @brief Check whether two enabled layout entries' rectangles touch or overlap (shared edge,
+     *        corner, or area) - used for the connectivity check, where sharing just a corner is
+     *        treated as touching since Windows accepts corner-only arrangements.
+     */
+    bool entriesTouch(const DeviceLayoutEntry &a, const DeviceLayoutEntry &b) {
+      const int a_right = a.m_position.m_x + static_cast<int>(a.m_resolution.m_width);
+      const int b_right = b.m_position.m_x + static_cast<int>(b.m_resolution.m_width);
+      const int a_bottom = a.m_position.m_y + static_cast<int>(a.m_resolution.m_height);
+      const int b_bottom = b.m_position.m_y + static_cast<int>(b.m_resolution.m_height);
+      return a.m_position.m_x <= b_right && b.m_position.m_x <= a_right &&
+             a.m_position.m_y <= b_bottom && b.m_position.m_y <= a_bottom;
+    }
+
+    /**
+     * @brief Check that a desired set of enabled outputs is something Windows will actually
+     *        accept: no two outputs overlap, and every output touches at least one other
+     *        (transitively) so there's no "floating" output with a gap to everything else.
+     *        Windows rejects both cases with ERROR_INVALID_PARAMETER, so it's better to catch it
+     *        here with a clear reason than let that opaque error surface from SetDisplayConfig.
+     * @param enabled_entries The enabled subset of a desired layout.
+     * @return `true` if the layout is geometrically valid.
+     */
+    bool isLayoutGeometryValid(const std::vector<DeviceLayoutEntry> &enabled_entries) {
+      for (std::size_t i = 0; i < enabled_entries.size(); ++i) {
+        for (std::size_t j = i + 1; j < enabled_entries.size(); ++j) {
+          if (entriesOverlap(enabled_entries[i], enabled_entries[j])) {
+            BOOST_LOG(error) << "apply_device_layout(): outputs " << enabled_entries[i].m_device_id
+                              << " and " << enabled_entries[j].m_device_id << " overlap";
+            return false;
+          }
+        }
+      }
+
+      if (enabled_entries.size() <= 1) {
+        return true;
+      }
+
+      std::vector<bool> visited(enabled_entries.size(), false);
+      std::vector<std::size_t> stack {0};
+      visited[0] = true;
+      std::size_t visited_count {1};
+      while (!stack.empty()) {
+        const auto current {stack.back()};
+        stack.pop_back();
+        for (std::size_t k = 0; k < enabled_entries.size(); ++k) {
+          if (!visited[k] && entriesTouch(enabled_entries[current], enabled_entries[k])) {
+            visited[k] = true;
+            ++visited_count;
+            stack.push_back(k);
+          }
+        }
+      }
+
+      if (visited_count != enabled_entries.size()) {
+        BOOST_LOG(error) << "apply_device_layout(): outputs are not all connected - every enabled "
+                             "output must touch at least one other, with no floating gaps";
+        return false;
+      }
+
+      return true;
+    }
+  }  // namespace
+#endif
+
   bool apply_device_layout([[maybe_unused]] const std::vector<DeviceLayoutEntry> &desired) {
 #ifdef _WIN32
     // This is not part of SettingsManagerInterface's persisted/reverted configuration
@@ -939,6 +1018,18 @@ namespace display_device {
       }
     }
 
+    std::vector<DeviceLayoutEntry> enabled_entries;
+    for (const auto &entry : desired) {
+      if (entry.m_enabled) {
+        enabled_entries.push_back(entry);
+      }
+    }
+
+    if (!isLayoutGeometryValid(enabled_entries)) {
+      // Errors already logged.
+      return false;
+    }
+
     WinDisplayDevice dd {std::make_shared<WinApiLayer>()};
 
     ActiveTopology topology;
@@ -947,11 +1038,7 @@ namespace display_device {
     StringMap<int> rotations;
     std::string primary_device_id;
 
-    for (const auto &entry : desired) {
-      if (!entry.m_enabled) {
-        continue;
-      }
-
+    for (const auto &entry : enabled_entries) {
       topology.push_back({entry.m_device_id});
 
       // A 0x0 resolution means we never actually observed a mode for this device (e.g. it was
