@@ -21,17 +21,43 @@ packetization, loss recovery and the decoded picture are all genuine.
 
 | Scenario | Checks |
 | --- | --- |
-| basic | Chrome decodes 30+ frames at the right size and 20+ fps, negotiates the best profile it offered, decodes a keyframe, sees under 2% loss, and the data channel echoes. Run with and without mDNS candidate hiding. |
+| basic | Chrome decodes 30+ frames at the right size and 20+ fps, negotiates the best profile it offered, decodes a keyframe, shows real picture content, sees under 2% loss, and the data channel echoes. Run with and without mDNS candidate hiding. |
 | closing the tab | The host stops the stream with no request from the browser. |
 | hanging up | `DELETE` returns 200, the stream stops, no sessions remain. |
 | dying stream | When the host stream ends on its own, the browser sees its connection end. |
 | no H.264 | A VP8-only browser is refused with a clear reason, and nothing is left running. |
 | limits | The fifth simultaneous session is refused. |
 
-## What it does not test
+## Tier 2: a real Sunshine
 
-The real host path: display configuration, capture, the encoder, and the tap in `stream.cpp`. That
-needs a full Sunshine build, which is heavy on memory, so it is not part of this tier.
+`run_sunshine.mjs` starts the actual `sunshine` binary on a private virtual display (Xvfb), with a
+video test pattern playing on it, and streams that display to headless Chrome. This is the part the
+fake host cannot cover: real screen capture, the real software encoder, display preparation, and the
+media tap in `stream.cpp`.
+
+```
+ninja -C cmake-build-webrtc -j4 sunshine   # a full link; heavy on memory, see below
+node run_sunshine.mjs
+```
+
+It runs the scenarios that need nothing special from the host. It also checks that the browser shows
+real screen content rather than a blank frame, by sampling the decoded picture. `--no-content` leaves
+the display empty on purpose, to show that check failing.
+
+Nothing touches the real desktop. Sunshine gets its own X server, a private home and runtime
+directory (so it finds no session bus and none of your settings), a PulseAudio address that goes
+nowhere with audio streaming off, and random ports. Everything it starts is stopped on exit.
+
+Use `-j4` or lower and a memory cap for the build. A full parallel link has crashed this machine before:
+
+```
+systemd-run --user --scope -p MemoryMax=14G -p MemorySwapMax=6G nice -n 10 ninja -C cmake-build-webrtc -j4 sunshine
+```
+
+## What neither tier tests
+
+Audio, real input injection (the harness has no access to `/dev/uinput`), hardware encoders, and
+several simultaneous real sessions.
 
 ## Checking that the tests can fail
 
