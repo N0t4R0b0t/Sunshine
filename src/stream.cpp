@@ -508,6 +508,8 @@ namespace stream {
 
     std::shared_ptr<input::input_t> input;  ///< Platform input device state for this stream.
 
+    std::shared_ptr<webrtc::media_sink_t> sink;  ///< Receiver of encoded media in place of the GameStream UDP path; null for GameStream clients.
+
     std::jthread audioThread;  ///< Audio thread.
     std::jthread videoThread;  ///< Video thread.
 
@@ -1340,7 +1342,9 @@ namespace stream {
 
           auto session = *pos;
 
-          if (now > session->pingTimeout) {
+          // A session with a media sink has no GameStream client to ping us; the sink ends the
+          // session itself when its own connection is lost.
+          if (!session->sink && now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
             BOOST_LOG(info) << address << ": Ping Timeout"sv;
             session::stop(*session);
@@ -1584,6 +1588,13 @@ namespace stream {
           payload_with_replacements = replace(payload, frame_old, frame_new);
           payload = {(char *) payload_with_replacements.data(), payload_with_replacements.size()};
         }
+      }
+
+      // A media sink takes the frame as-is, with the replacements above already applied, and
+      // skips everything below: short frame header, FEC, encryption and the UDP send.
+      if (session->sink) {
+        session->sink->video_frame(payload, packet->is_idr(), packet->frame_index());
+        continue;
       }
 
       video_short_frame_header_t frame_header = {};
@@ -1893,6 +1904,11 @@ namespace stream {
       TUPLE_2D_REF(channel_data, packet_data, *packet);
       auto *session = channel_data;
 
+      if (session->sink) {
+        session->sink->audio_frame(std::string_view {(const char *) packet_data.begin(), packet_data.size()});
+        continue;
+      }
+
       auto sequenceNumber = session->audio.sequenceNumber;
       auto timestamp = session->audio.timestamp;
 
@@ -2150,15 +2166,18 @@ namespace stream {
 
     while_starting_do_nothing(session->state);
 
-    auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
-    if (error < 0) {
-      return;
-    }
+    // A media sink has no UDP peer to wait for or to tag traffic for.
+    if (!session->sink) {
+      auto ref = broadcast.ref();
+      auto error = recv_ping(session, ref, socket_e::video, session->video.ping_payload, session->video.peer, config::stream.ping_timeout);
+      if (error < 0) {
+        return;
+      }
 
-    // Enable local prioritization and QoS tagging on video traffic if requested by the client
-    auto address = session->video.peer.address();
-    session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+      // Enable local prioritization and QoS tagging on video traffic if requested by the client
+      auto address = session->video.peer.address();
+      session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+    }
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
     video::capture(session->mail, session->config.monitor, session);
@@ -2177,15 +2196,18 @@ namespace stream {
 
     while_starting_do_nothing(session->state);
 
-    auto ref = broadcast.ref();
-    auto error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
-    if (error < 0) {
-      return;
-    }
+    // A media sink has no UDP peer to wait for or to tag traffic for.
+    if (!session->sink) {
+      auto ref = broadcast.ref();
+      auto error = recv_ping(session, ref, socket_e::audio, session->audio.ping_payload, session->audio.peer, config::stream.ping_timeout);
+      if (error < 0) {
+        return;
+      }
 
-    // Enable local prioritization and QoS tagging on audio traffic if requested by the client
-    auto address = session->audio.peer.address();
-    session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
+      // Enable local prioritization and QoS tagging on audio traffic if requested by the client
+      auto address = session->audio.peer.address();
+      session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
+    }
 
     BOOST_LOG(debug) << "Start capturing Audio"sv;
     audio::capture(session->mail, session->config.audio, session);
@@ -2206,6 +2228,13 @@ namespace stream {
      */
     const std::string &client_cert(session_t &session) {
       return session.client_cert;
+    }
+
+    /**
+     * @brief Ask the encoder for a keyframe.
+     */
+    void request_idr(session_t &session) {
+      session.video.idr_events->raise(true);
     }
 
     /**
@@ -2328,8 +2357,9 @@ namespace stream {
     /**
      * @brief Allocate and initialize platform input state for a stream.
      */
-    std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session) {
+    std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session, std::shared_ptr<webrtc::media_sink_t> sink) {
       auto session = std::make_shared<session_t>();
+      session->sink = std::move(sink);
 
       auto mail = std::make_shared<safe::mail_raw_t>();
 

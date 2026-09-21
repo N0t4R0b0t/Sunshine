@@ -700,6 +700,21 @@ namespace rtsp_stream {
     server.session_clear(launch_session_id);
   }
 
+  std::shared_ptr<stream::session_t> start_direct_session(stream::config_t &config, launch_session_t &launch_session, std::shared_ptr<webrtc::media_sink_t> sink) {
+    auto stream_session = stream::session::alloc(config, launch_session, std::move(sink));
+    server.insert(stream_session);
+
+    // There is no GameStream peer for this session, so the address is only a placeholder.
+    if (stream::session::start(*stream_session, "127.0.0.1")) {
+      BOOST_LOG(error) << "Failed to start a direct streaming session"sv;
+
+      server.remove(stream_session);
+      return nullptr;
+    }
+
+    return stream_session;
+  }
+
   int session_count() {
     // Ensure session_count is up-to-date
     server.clear(false);
