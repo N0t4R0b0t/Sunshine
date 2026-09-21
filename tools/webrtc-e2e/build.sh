@@ -18,20 +18,22 @@ done
 
 mkdir -p "$out"
 flags=(-std=gnu++23 -O1 -g -DRTC_STATIC -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0
-       -I"$here/shim" -I"$root" -I"$root/src/webrtc" -I"$root/third-party/libdatachannel/include")
+       -I"$here/shim" -I"$root" -I"$root/src/webrtc" -isystem "$root/third-party" -I"$root/third-party/libdatachannel/include")
 
-# Objects are built in parallel but kept to three jobs, since this machine runs out of memory easily.
+# Objects are built in parallel but kept to four jobs, since this machine runs out of memory easily.
 compile() { c++ "${flags[@]}" -c "$1" -o "$2"; }
 pids=()
 compile "$here/e2e_host.cpp" "$out/e2e_host.o" & pids+=($!)
 compile "$root/src/webrtc/session.cpp" "$out/session.o" & pids+=($!)
+# INPUT_SRC does the same for the input translator.
+compile "${INPUT_SRC:-$root/src/webrtc/input_translate.cpp}" "$out/input_translate.o" & pids+=($!)
 # MEDIA_SRC lets a test build a deliberately broken copy without touching the real source.
 compile "${MEDIA_SRC:-$root/src/webrtc/media.cpp}" "$out/media.o" & pids+=($!)
 for pid in "${pids[@]}"; do
   wait "$pid" || { echo "compile failed" >&2; exit 1; }
 done
 
-c++ -o "$out/e2e_host" "$out/e2e_host.o" "$out/session.o" "$out/media.o" \
+c++ -o "$out/e2e_host" "$out/e2e_host.o" "$out/session.o" "$out/media.o" "$out/input_translate.o" \
   "$ldc/libdatachannel.a" "$ldc/deps/libjuice/libjuice.a" "$ldc/deps/libsrtp/libsrtp2.a" \
   "$ldc/deps/usrsctp/usrsctplib/libusrsctp.a" -lssl -lcrypto -lpthread
 echo "built $out/e2e_host"
