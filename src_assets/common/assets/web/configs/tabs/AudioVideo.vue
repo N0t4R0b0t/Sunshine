@@ -7,6 +7,7 @@ import DisplayOutputSelector from './audiovideo/DisplayOutputSelector.vue'
 import DisplayLayoutManager from './audiovideo/DisplayLayoutManager.vue'
 import DisplayDeviceOptions from "./audiovideo/DisplayDeviceOptions.vue";
 import DisplayModesSettings from "./audiovideo/DisplayModesSettings.vue";
+import WebRtcSettings from "./audiovideo/WebRtcSettings.vue";
 import Checkbox from "../../Checkbox.vue";
 
 const props = defineProps({
@@ -86,6 +87,12 @@ const config = ref(props.config)
 
     <!-- Display Modes -->
     <DisplayModesSettings
+        :platform="platform"
+        :config="config"
+    />
+
+    <!-- Browser streaming client -->
+    <WebRtcSettings
         :platform="platform"
         :config="config"
     />
