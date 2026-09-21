@@ -229,4 +229,38 @@ function h264Profiles() {
     .map((codec) => codec.sdpFmtpLine || '');
 }
 
-window.e2e = { connect, stats, echo, abandon, hangUp, connectionState, receiverCodecs, h264Profiles };
+/**
+ * Look at the picture the browser is actually showing, so a run can tell real content from a blank frame.
+ *
+ * The video is drawn onto a small canvas and its pixels summarized.
+ *
+ * @param {number} handle Session handle from connect().
+ * @returns {object} Mean brightness, standard deviation, and how many distinct coarse colours appear.
+ */
+function pictureStats(handle) {
+  const { video } = sessions.get(handle);
+  const width = 64;
+  const height = 36;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(video, 0, 0, width, height);
+  const { data } = context.getImageData(0, 0, width, height);
+
+  let sum = 0;
+  let sumSquares = 0;
+  const colours = new Set();
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    sum += luma;
+    sumSquares += luma * luma;
+    // Quantize each channel to 4 levels, so compression noise does not count as a new colour.
+    colours.add(((data[i] >> 6) << 4) | ((data[i + 1] >> 6) << 2) | (data[i + 2] >> 6));
+  }
+  const pixels = data.length / 4;
+  const mean = sum / pixels;
+  return { mean, stddev: Math.sqrt(Math.max(0, sumSquares / pixels - mean * mean)), distinctColours: colours.size };
+}
+
+window.e2e = { pictureStats, connect, stats, echo, abandon, hangUp, connectionState, receiverCodecs, h264Profiles };
