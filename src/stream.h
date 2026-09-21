@@ -14,6 +14,7 @@
 #include "audio.h"
 #include "crypto.h"
 #include "video.h"
+#include "webrtc/sink.h"
 
 namespace stream {
   constexpr auto VIDEO_STREAM_PORT = 9;  ///< GameStream base-port offset used for the video UDP stream.
@@ -57,9 +58,12 @@ namespace stream {
      *
      * @param config Configuration values to apply.
      * @param launch_session Launch session.
+     * @param sink Optional receiver of encoded media. When set, the session sends nothing over the
+     *             GameStream UDP path and does not require a client ping; the sink owns delivery
+     *             and liveness instead.
      * @return Allocated object or identifier, or an error value on failure.
      */
-    std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session);
+    std::shared_ptr<session_t> alloc(config_t &config, rtsp_stream::launch_session_t &launch_session, std::shared_ptr<webrtc::media_sink_t> sink = nullptr);
     /**
      * @brief Start a streaming session for the supplied peer address.
      *
@@ -87,6 +91,12 @@ namespace stream {
      * @return Current lifecycle state for the stream session.
      */
     state_e state(session_t &session);
+    /**
+     * @brief Ask the encoder for a keyframe.
+     *
+     * @param session Active streaming session.
+     */
+    void request_idr(session_t &session);
     /**
      * @brief Return the paired client certificate for a stream session.
      *

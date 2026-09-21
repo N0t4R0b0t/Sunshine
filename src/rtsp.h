@@ -9,10 +9,17 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 // local includes
 #include "crypto.h"
 #include "thread_safe.h"
+#include "webrtc/sink.h"
+
+namespace stream {
+  struct config_t;
+  struct session_t;
+}  // namespace stream
 
 namespace rtsp_stream {
   constexpr auto RTSP_SETUP_PORT = 21;  ///< GameStream base-port offset used for the RTSP setup listener.
@@ -113,6 +120,20 @@ namespace rtsp_stream {
    * @param launch_session_id The ID of the session to clear.
    */
   void launch_session_clear(uint32_t launch_session_id);
+
+  /**
+   * @brief Start a streaming session that has no RTSP handshake.
+   *
+   * The session is tracked and reaped like any other, so it counts toward session_count() and is
+   * ended by terminate_sessions(). Use this for a client that is not speaking the GameStream
+   * protocol and receives its media through a sink instead.
+   *
+   * @param config Stream configuration to run with.
+   * @param launch_session Launch state, supplying keys and identifiers.
+   * @param sink Receiver of the session's encoded media.
+   * @return The running session, or `nullptr` if it could not be started.
+   */
+  std::shared_ptr<stream::session_t> start_direct_session(stream::config_t &config, launch_session_t &launch_session, std::shared_ptr<webrtc::media_sink_t> sink);
 
   /**
    * @brief Get the number of active sessions.
