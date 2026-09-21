@@ -1,0 +1,12 @@
+{
+  "name": "sunshine-webrtc-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Unattended end-to-end tests for the browser streaming client",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "playwright-core": "^1.50.0"
+  }
+}
