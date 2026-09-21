@@ -132,6 +132,8 @@ endif()
 if(SUNSHINE_ENABLE_WEBRTC)
     list(APPEND PLATFORM_TARGET_FILES
             "${CMAKE_SOURCE_DIR}/src/webrtc/host_stream.cpp"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/input_translate.cpp"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/input_translate.h"
             "${CMAKE_SOURCE_DIR}/src/webrtc/media.cpp"
             "${CMAKE_SOURCE_DIR}/src/webrtc/media.h"
             "${CMAKE_SOURCE_DIR}/src/webrtc/session.cpp"

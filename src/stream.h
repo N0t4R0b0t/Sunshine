@@ -98,6 +98,16 @@ namespace stream {
      */
     void request_idr(session_t &session);
     /**
+     * @brief Hand a client input packet to the session's input handling.
+     *
+     * This is the path a GameStream client's packets take after decryption, so a client that is not
+     * speaking that protocol can inject the same packets.
+     *
+     * @param session Active streaming session.
+     * @param packet A complete Moonlight input packet.
+     */
+    void passthrough_input(session_t &session, std::vector<std::uint8_t> &&packet);
+    /**
      * @brief Return the paired client certificate for a stream session.
      *
      * @param session Active streaming or pairing session for the request.
