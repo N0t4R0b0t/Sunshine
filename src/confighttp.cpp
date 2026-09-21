@@ -63,6 +63,9 @@
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
+#ifdef SUNSHINE_BUILD_WEBRTC
+  #include "webrtc/session.h"
+#endif
 
 using namespace std::literals;
 
@@ -2944,6 +2947,139 @@ namespace confighttp {
     }
   }
 
+#ifdef SUNSHINE_BUILD_WEBRTC
+  /**
+   * @brief Send a JSON error response with an explicit status code.
+   * @param response The HTTP response object.
+   * @param code The HTTP status code to send.
+   * @param error_message The error message to include in the response.
+   */
+  void webrtc_error(const resp_https_t &response, SimpleWeb::StatusCode code, const std::string &error_message) {
+    nlohmann::json tree;
+    tree["status_code"] = code;
+    tree["status"] = false;
+    tree["error"] = error_message;
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+
+    response->write(code, tree.dump(), headers);
+  }
+
+  /**
+   * @brief Open a browser streaming session from an SDP offer.
+   *
+   * The response carries the SDP answer with all ICE candidates already gathered, so the browser
+   * needs no further signaling.
+   *
+   * The body for the POST request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "type": "offer",
+   *   "sdp": "<sdp>",
+   *   "width": 1920,
+   *   "height": 1080,
+   *   "fps": 60,
+   *   "bitrate": 20000,
+   *   "appid": 0
+   * }
+   * @endcode
+   *
+   * Everything after `sdp` is optional. `bitrate` is in kilobits per second, and an `appid` of zero
+   * streams the desktop as it is.
+   *
+   * @api_examples{/api/webrtc/session| POST| {"type":"offer","sdp":"v=0...","width":1920,"height":1080,"fps":60}}
+   */
+  void createWebrtcSession(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    if (!config::sunshine.webrtc_enabled) {
+      webrtc_error(response, SimpleWeb::StatusCode::client_error_forbidden, "The browser streaming client is disabled");
+      return;
+    }
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (input_tree.value("type", "") != "offer") {
+        bad_request(response, request, "Expected an SDP offer");
+        return;
+      }
+      const auto sdp = input_tree.value("sdp", "");
+
+      // Everything here comes from the browser, so bound it before it reaches the encoder.
+      webrtc::stream_request_t stream_request;
+      stream_request.width = std::clamp(input_tree.value("width", stream_request.width), 320, 7680);
+      stream_request.height = std::clamp(input_tree.value("height", stream_request.height), 240, 4320);
+      stream_request.fps = std::clamp(input_tree.value("fps", stream_request.fps), 1, 240);
+      stream_request.bitrate_kbps = std::clamp(input_tree.value("bitrate", stream_request.bitrate_kbps), 500, 500000);
+      stream_request.appid = input_tree.value("appid", stream_request.appid);
+
+      std::string error;
+      const auto answer = webrtc::accept_offer(sdp, config::sunshine.webrtc_stun_server, stream_request, error);
+      if (!answer) {
+        bad_request(response, request, error);
+        return;
+      }
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      output_tree["id"] = answer->id;
+      output_tree["type"] = "answer";
+      output_tree["sdp"] = answer->sdp;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "CreateWebrtcSession: "sv << e.what();
+      bad_request(response, request, "Invalid request");
+    }
+  }
+
+  /**
+   * @brief Close a browser streaming session.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object. The session identifier is the last path segment.
+   *
+   * @api_examples{/api/webrtc/session/abc123| DELETE| null}
+   */
+  void closeWebrtcSession(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    if (!webrtc::close_session(request->path_match[1])) {
+      not_found(response, request, "No such browser session");
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+#endif
+
   /**
    * @brief Start the HTTPS configuration server.
    */
@@ -3015,6 +3151,10 @@ namespace confighttp {
     server.resource["^/api/permissions$"]["GET"] = getPermissions;
     server.resource["^/api/permissions/request$"]["POST"] = requestPermission;
     server.resource["^/api/virtual-input/license$"]["GET"] = getVirtualInputLicense;
+#ifdef SUNSHINE_BUILD_WEBRTC
+    server.resource["^/api/webrtc/session$"]["POST"] = createWebrtcSession;
+    server.resource["^/api/webrtc/session/([a-z0-9]{16})$"]["DELETE"] = closeWebrtcSession;
+#endif
     server.resource["^/api/virtual-input/license$"]["POST"] = updateVirtualInputLicense;
     server.resource["^/api/virtual-input/status$"]["GET"] = getVirtualInputStatus;
 

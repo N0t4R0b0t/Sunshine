@@ -128,6 +128,17 @@ if(WIN32)
     )
 endif()
 
+# browser streaming client sources; this must come before SUNSHINE_TARGET_FILES consumes PLATFORM_TARGET_FILES
+if(SUNSHINE_ENABLE_WEBRTC)
+    list(APPEND PLATFORM_TARGET_FILES
+            "${CMAKE_SOURCE_DIR}/src/webrtc/host_stream.cpp"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/media.cpp"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/media.h"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/session.cpp"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/session.h"
+            "${CMAKE_SOURCE_DIR}/src/webrtc/sink.h")
+endif()
+
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
 set(SUNSHINE_TARGET_FILES
@@ -225,6 +236,11 @@ include_directories(
 
 if(NOT APPLE)
     include_directories(BEFORE SYSTEM "${NV_CODEC_HEADERS_13_1_INCLUDE_DIR}")
+endif()
+
+if(SUNSHINE_ENABLE_WEBRTC)
+    list(APPEND SUNSHINE_EXTERNAL_LIBRARIES LibDataChannel::LibDataChannel)
+    add_compile_definitions(SUNSHINE_BUILD_WEBRTC)
 endif()
 
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
