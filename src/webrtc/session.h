@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // local includes
 #include "sink.h"
@@ -63,6 +64,13 @@ namespace webrtc {
      * @brief Ask the encoder for a keyframe. Must not block.
      */
     virtual void request_idr() = 0;
+
+    /**
+     * @brief Deliver a Moonlight input packet from the browser to the host. Must not block.
+     *
+     * @param packet A complete, well-formed Moonlight input packet.
+     */
+    virtual void send_input(std::vector<std::uint8_t> &&packet) = 0;
   };
 
   /**

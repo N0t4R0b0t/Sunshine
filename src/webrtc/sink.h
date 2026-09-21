@@ -10,6 +10,15 @@
 
 namespace webrtc {
   /**
+   * @brief Duration of each audio packet a browser session asks the host to produce, in milliseconds.
+   *
+   * GameStream's default of 5 ms would mean 200 packets a second for no benefit over WebRTC, so
+   * browser sessions use 20 ms, which is also what Opus is normally carried at. The audio sender
+   * relies on it to timestamp packets, so the two must agree.
+   */
+  constexpr int audio_packet_duration_ms = 20;
+
+  /**
    * @brief Receives encoded audio and video in place of the GameStream UDP path.
    *
    * A streaming session with a sink attached does not packetize, FEC-protect, encrypt or send its

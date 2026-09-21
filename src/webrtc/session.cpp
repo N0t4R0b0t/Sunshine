@@ -18,6 +18,7 @@
 #include <rtc/rtc.hpp>
 
 // local includes
+#include "input_translate.h"
 #include "media.h"
 #include "session.h"
 #include "src/crypto.h"
@@ -30,6 +31,9 @@ namespace webrtc {
     constexpr auto gathering_timeout = 5s;  ///< How long to wait for ICE candidate gathering.
     constexpr auto connect_timeout = 30s;  ///< How long a session may sit unconnected before it is reaped.
     constexpr auto reap_interval = 1s;  ///< How often finished sessions are cleaned up.
+    constexpr auto ping_channel_label = "ping"sv;  ///< Label of the data channel that echoes, for measuring latency.
+    constexpr auto input_channel_label = "input"sv;  ///< Label of the data channel that carries keyboard, mouse and controller input.
+    const std::string media_stream_id {"sunshine"};  ///< Stream that the video and audio tracks both belong to, so a browser keeps them in sync.
 
     /**
      * @brief State shared between a peer connection's callbacks and the code that owns it.
@@ -59,6 +63,39 @@ namespace webrtc {
         if (stream) {
           stream->stop();
         }
+      }
+
+      /**
+       * @brief Pass a browser's input packet to its host stream.
+       *
+       * Input that arrives before the stream exists, or after the connection died, is dropped.
+       *
+       * @param packet A complete Moonlight input packet.
+       */
+      void send_input(std::vector<std::uint8_t> &&packet) {
+        if (dead) {
+          return;
+        }
+
+        std::shared_ptr<stream_handle_t> stream;
+        {
+          std::lock_guard lg {mutex_};
+          stream = stream_.lock();
+        }
+        if (stream) {
+          stream->send_input(std::move(packet));
+        }
+      }
+
+      /**
+       * @brief Note a rejected input message, and say whether it is worth logging.
+       *
+       * A misbehaving page could send thousands, so only the first few are reported.
+       *
+       * @return `true` for the first few rejections on this connection.
+       */
+      bool should_log_rejected_input() {
+        return ++rejected_input_ <= max_logged_rejections;
       }
 
       /**
@@ -97,6 +134,9 @@ namespace webrtc {
 
     private:
       static constexpr std::size_t max_channels = 8;  ///< Most data channels a browser may open.
+      static constexpr int max_logged_rejections = 5;  ///< How many rejected input messages are logged per connection.
+
+      std::atomic_int rejected_input_ {0};  ///< Input messages refused on this connection.
 
       std::mutex mutex_;  ///< Guards `stream_` and `channels_`.
       std::weak_ptr<stream_handle_t> stream_;  ///< The host stream to stop when the connection dies.
@@ -132,11 +172,21 @@ namespace webrtc {
     };
 
     /**
-     * @brief What the browser's offer asks for in the way of video.
+     * @brief The Opus codec chosen from a browser's offer.
      */
-    struct video_offer_t {
-      bool present = false;  ///< Whether the offer has a video section that wants to receive.
+    struct opus_choice_t {
+      std::string mid;  ///< Media section identifier the answer must reuse.
+      int payload_type;  ///< Payload type the browser assigned to Opus.
+    };
+
+    /**
+     * @brief What the browser's offer asks for in the way of video and audio.
+     */
+    struct media_offer_t {
+      bool video_present = false;  ///< Whether the offer has a video section that wants to receive.
       std::optional<h264_choice_t> h264;  ///< The H.264 codec to use, if the browser offered a usable one.
+      bool audio_present = false;  ///< Whether the offer has an audio section that wants to receive.
+      std::optional<opus_choice_t> opus;  ///< The Opus codec to use, if the browser offered it.
     };
 
     std::mutex sessions_mutex;  ///< Guards `sessions`.
@@ -192,45 +242,64 @@ namespace webrtc {
     }
 
     /**
-     * @brief Find what the offer wants for video, and the best H.264 codec it offers.
+     * @brief Whether a media section is one that wants to receive from us.
+     *
+     * @param media The media section.
+     * @return `true` if the browser offered to receive.
+     */
+    bool wants_to_receive(const rtc::Description::Media &media) {
+      using direction_e = rtc::Description::Direction;
+      return media.direction() == direction_e::RecvOnly || media.direction() == direction_e::SendRecv;
+    }
+
+    /**
+     * @brief Find what the offer wants for video and audio, and the codecs to answer with.
+     *
+     * Only the first section of each kind is answered.
      *
      * @param offer The browser's offer.
-     * @return Whether video is wanted, and which H.264 codec to answer with.
+     * @return Whether video and audio are wanted, and which codecs to answer with.
      */
-    video_offer_t inspect_video(rtc::Description &offer) {
-      video_offer_t result;
-      int best = 0;
+    media_offer_t inspect_media(rtc::Description &offer) {
+      media_offer_t result;
+      int best_h264 = 0;
 
       for (int i = 0; i < offer.mediaCount(); ++i) {
         auto entry = offer.media(i);
         const auto *media_pp = std::get_if<rtc::Description::Media *>(&entry);
-        if (!media_pp || (*media_pp)->type() != "video") {
+        if (!media_pp || !wants_to_receive(**media_pp)) {
           continue;
         }
 
         auto *media = *media_pp;
-        using direction_e = rtc::Description::Direction;
-        if (media->direction() != direction_e::RecvOnly && media->direction() != direction_e::SendRecv) {
-          continue;
-        }
 
-        result.present = true;
+        if (media->type() == "video" && !result.video_present) {
+          result.video_present = true;
 
-        for (const int payload_type : media->payloadTypes()) {
-          const auto *map = media->rtpMap(payload_type);
-          if (!map || map->format != "H264" || map->fmtps.empty()) {
-            continue;
+          for (const int payload_type : media->payloadTypes()) {
+            const auto *map = media->rtpMap(payload_type);
+            if (!map || map->format != "H264" || map->fmtps.empty()) {
+              continue;
+            }
+
+            const int preference = h264_preference(map->fmtps.front());
+            if (preference > best_h264) {
+              best_h264 = preference;
+              result.h264 = h264_choice_t {media->mid(), payload_type, map->fmtps.front()};
+            }
           }
+        } else if (media->type() == "audio" && !result.audio_present) {
+          result.audio_present = true;
 
-          const int preference = h264_preference(map->fmtps.front());
-          if (preference > best) {
-            best = preference;
-            result.h264 = h264_choice_t {media->mid(), payload_type, map->fmtps.front()};
+          for (const int payload_type : media->payloadTypes()) {
+            const auto *map = media->rtpMap(payload_type);
+            // Codec names are case-insensitive in SDP, and browsers write it as "opus".
+            if (map && (map->format == "opus" || map->format == "OPUS" || map->format == "Opus") && map->clockRate == 48000) {
+              result.opus = opus_choice_t {media->mid(), payload_type};
+              break;
+            }
           }
         }
-
-        // Only the first video section is answered.
-        break;
       }
 
       return result;
@@ -371,10 +440,14 @@ namespace webrtc {
     std::shared_ptr<rtc::PeerConnection> connection;
     try {
       rtc::Description offer {std::string {offer_sdp}, "offer"};
-      const auto video = inspect_video(offer);
+      const auto media = inspect_media(offer);
 
-      if (video.present && !video.h264) {
+      if (media.video_present && !media.h264) {
         error = "Browser does not support H.264 video";
+        return std::nullopt;
+      }
+      if (media.audio_present && !media.opus) {
+        error = "Browser does not support Opus audio";
         return std::nullopt;
       }
 
@@ -413,15 +486,37 @@ namespace webrtc {
         }
       });
 
-      // Placeholder behavior until the real input channel exists: echo every message back, so the
-      // browser can prove the data path works end to end.
+      // The browser opens a channel for each purpose, and the label says which. Anything else is
+      // refused, so a page cannot use the connection for something it was not meant for.
       connection->onDataChannel([state](std::shared_ptr<rtc::DataChannel> channel) {
+        const auto label = channel->label();
         std::weak_ptr<rtc::DataChannel> weak {channel};
-        channel->onMessage([weak](rtc::message_variant message) {
-          if (auto locked = weak.lock()) {
-            locked->send(std::move(message));
-          }
-        });
+
+        if (label == ping_channel_label) {
+          // Echoes everything back, so the browser can measure the round trip.
+          channel->onMessage([weak](rtc::message_variant message) {
+            if (auto locked = weak.lock()) {
+              locked->send(std::move(message));
+            }
+          });
+        } else if (label == input_channel_label) {
+          channel->onMessage([state](rtc::message_variant message) {
+            std::string error;
+            const auto *text = std::get_if<std::string>(&message);
+            const auto packet = text ? translate_input(*text, error) : std::nullopt;
+            if (!packet) {
+              if (state->should_log_rejected_input()) {
+                BOOST_LOG(warning) << "WebRTC: ignoring browser input: "sv << (text ? error : "input must be sent as text"s);
+              }
+              return;
+            }
+            state->send_input(std::vector<std::uint8_t> {*packet});
+          });
+        } else {
+          BOOST_LOG(warning) << "WebRTC: refusing a data channel with an unknown label"sv;
+          channel->close();
+          return;
+        }
 
         if (!state->keep_channel(channel)) {
           BOOST_LOG(warning) << "WebRTC: refusing a data channel, the browser opened too many"sv;
@@ -430,18 +525,31 @@ namespace webrtc {
       });
 
       // The video track has to exist before the offer is applied, so the answer can include it.
-      std::shared_ptr<rtc_video_sink_t> sink;
-      if (video.h264) {
+      std::shared_ptr<rtc_media_sink_t> sink;
+      if (media.h264) {
         std::uint32_t ssrc = 0;
         RAND_bytes(reinterpret_cast<unsigned char *>(&ssrc), sizeof(ssrc));
 
         // Reuse the browser's own format parameters so the answered profile matches what it offered.
-        rtc::Description::Video track_description {video.h264->mid, rtc::Description::Direction::SendOnly};
-        track_description.addH264Codec(video.h264->payload_type, video.h264->fmtp);
-        track_description.addSSRC(ssrc, "sunshine");
+        rtc::Description::Video track_description {media.h264->mid, rtc::Description::Direction::SendOnly};
+        track_description.addH264Codec(media.h264->payload_type, media.h264->fmtp);
+        // Both tracks name the same stream, which is what lets the browser play audio and video in sync.
+        track_description.addSSRC(ssrc, "sunshine", media_stream_id, "video");
 
         auto track = connection->addTrack(track_description);
-        sink = rtc_video_sink_t::create(std::move(track), static_cast<std::uint8_t>(video.h264->payload_type), ssrc);
+        sink = rtc_media_sink_t::create(std::move(track), static_cast<std::uint8_t>(media.h264->payload_type), ssrc);
+
+        // Audio rides along with a stream, and is only added if the browser asked for it.
+        if (media.opus) {
+          std::uint32_t audio_ssrc = 0;
+          RAND_bytes(reinterpret_cast<unsigned char *>(&audio_ssrc), sizeof(audio_ssrc));
+
+          rtc::Description::Audio audio_description {media.opus->mid, rtc::Description::Direction::SendOnly};
+          audio_description.addOpusCodec(media.opus->payload_type);
+          audio_description.addSSRC(audio_ssrc, "sunshine", media_stream_id, "audio");
+
+          sink->add_audio(connection->addTrack(audio_description), static_cast<std::uint8_t>(media.opus->payload_type), audio_ssrc);
+        }
       }
 
       // Auto-negotiation turns this offer into a local answer and begins gathering.
@@ -508,7 +616,7 @@ namespace webrtc {
         }
       }
 
-      BOOST_LOG(info) << "WebRTC: accepted browser session "sv << answer.id << (sink ? " with video"sv : ""sv);
+      BOOST_LOG(info) << "WebRTC: accepted browser session "sv << answer.id << (sink ? (media.opus ? " with video and audio"sv : " with video"sv) : ""sv);
       return answer;
     } catch (const std::exception &e) {
       BOOST_LOG(warning) << "WebRTC: failed to accept offer: "sv << e.what();

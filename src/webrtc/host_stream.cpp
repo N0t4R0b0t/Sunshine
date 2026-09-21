@@ -74,6 +74,10 @@ namespace webrtc {
         stream::session::request_idr(*session_);
       }
 
+      void send_input(std::vector<std::uint8_t> &&packet) override {
+        stream::session::passthrough_input(*session_, std::move(packet));
+      }
+
     private:
       std::shared_ptr<stream::session_t> session_;  ///< The session being controlled.
     };
@@ -131,7 +135,7 @@ namespace webrtc {
 
       config.audio.channels = 2;
       config.audio.mask = stereo_speaker_mask;
-      config.audio.packetDuration = 20;
+      config.audio.packetDuration = audio_packet_duration_ms;
 
       config.monitor.width = request.width;
       config.monitor.height = request.height;
