@@ -2238,6 +2238,13 @@ namespace stream {
     }
 
     /**
+     * @brief Hand a client input packet to the session's input handling.
+     */
+    void passthrough_input(session_t &session, std::vector<std::uint8_t> &&packet) {
+      input::passthrough(session.input, std::move(packet));
+    }
+
+    /**
      * @brief Stop the active streaming session and prevent new packets from being queued.
      */
     void stop(session_t &session) {
