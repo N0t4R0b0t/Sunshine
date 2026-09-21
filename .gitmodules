@@ -13,6 +13,9 @@
 [submodule "third-party/glad"]
 	path = third-party/glad
 	url = https://github.com/Dav1dde/glad.git
+[submodule "third-party/libdatachannel"]
+	path = third-party/libdatachannel
+	url = https://github.com/paullouisageneau/libdatachannel.git
 [submodule "third-party/libdisplaydevice"]
 	path = third-party/libdisplaydevice
 	url = https://github.com/LizardByte/libdisplaydevice.git

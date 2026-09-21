@@ -1170,6 +1170,63 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### webrtc_enabled
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Serves a browser-based Moonlight client from the web UI, letting you
+            stream this host from a browser with nothing installed on the client.
+            Video and audio are delivered over WebRTC and input travels back over
+            a data channel.
+            @warning{Anyone who can sign in to the web UI can view and control the
+            host's desktop while this is enabled. It is off by default.}
+            @note{The browser must have accepted Sunshine's certificate first.
+            Mouse and keyboard capture require a secure context.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            webrtc_enabled = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### webrtc_stun_server
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            STUN server used by the browser streaming client to discover a
+            reachable address. Only needed when the browser cannot reach the host
+            directly, such as across separate networks. Leave empty for normal use
+            on the same network, where host candidates are sufficient.
+            @note{Has no effect unless `webrtc_enabled` is turned on.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            webrtc_stun_server = stun:stun.example.com:19302
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_configuration_option
 
 <table>

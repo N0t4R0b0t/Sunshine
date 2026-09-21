@@ -1777,6 +1777,10 @@ namespace config {
     sunshine.layout_management_enabled = false;
     bool_f(vars, "layout_management_enabled", config::sunshine.layout_management_enabled);
 
+    sunshine.webrtc_enabled = false;
+    bool_f(vars, "webrtc_enabled", config::sunshine.webrtc_enabled);
+    string_f(vars, "webrtc_stun_server", config::sunshine.webrtc_stun_server);
+
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
 

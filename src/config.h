@@ -412,6 +412,12 @@ namespace config {
     // "restore" layout on startup and client disconnect. Off by default - nothing in the layout
     // system runs automatically until a user explicitly enables it here.
     bool layout_management_enabled;  ///< Whether saved display layouts and restore-on-disconnect/startup are enabled.
+
+    // Opt-in: the browser streaming client, which serves a WebRTC-based Moonlight client from
+    // the web UI. Off by default because it lets anyone holding web UI credentials take control
+    // of the host's desktop from a browser.
+    bool webrtc_enabled;  ///< Whether the browser streaming client is served and accepts sessions.
+    std::string webrtc_stun_server;  ///< Optional STUN server for the browser client; empty means host candidates only.
   };
 
   extern video_t video;
