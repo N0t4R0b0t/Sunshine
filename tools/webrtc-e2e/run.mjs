@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { call, scenarios, sleep, until } from './scenarios.mjs';
+import { call, decodeInput, installInput, scenarios, sleep, until } from './scenarios.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const buildDir = join(here, 'build');
@@ -96,7 +96,15 @@ class FakeHost {
 
   /** What this host can do, so scenarios only rely on what is available. */
   can(feature) {
-    return ['count', 'die_after', 'keyframe_event'].includes(feature);
+    return ['count', 'die_after', 'keyframe_event', 'audio', 'input_packets'].includes(feature);
+  }
+
+  /** The input packets the host received since `since`, decoded. */
+  inputs(since) {
+    return this.events
+      .slice(since)
+      .filter((event) => event.name === 'input')
+      .map((event) => decodeInput(event.detail));
   }
 
   /** Index to pass as `since`, so a scenario only sees events from after it started. */
@@ -248,6 +256,7 @@ async function main() {
       const page = await context.newPage();
       page.on('pageerror', (error) => t.check('no page errors', false, error.message));
       await page.goto(baseUrl);
+      await installInput(page);
 
       const started = Date.now();
       try {

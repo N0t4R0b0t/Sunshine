@@ -38,7 +38,8 @@ function gathered(pc) {
  * @param {number} [options.height] Requested height.
  * @param {number} [options.fps] Requested frame rate.
  * @param {number} [options.bitrate] Requested bitrate in kbps.
- * @param {string} [options.codecs] `any`, or `vp8` to offer only a codec the host cannot send.
+ * @param {string} [options.codecs] `any`, or `vp8` to offer only a video codec the host cannot send.
+ * @param {string} [options.audio] `opus` (the default), `none` to ask for no audio, or `pcmu` to offer only an audio codec the host cannot send.
  * @param {number} [options.die_after_s] Test knob for the fake host: end the stream after this long.
  * @returns {Promise<object>} `{ok, handle}` on success, or `{ok:false, status, error}`.
  */
@@ -52,8 +53,10 @@ async function connect(options = {}) {
     lastSample: null,
   };
 
+  // A fixed place and size, so a test can aim the mouse at known coordinates in the picture.
+  Object.assign(state.video.style, { position: 'fixed', left: '20px', top: '20px', width: '640px', height: '360px' });
   state.video.autoplay = true;
-  state.video.muted = true;
+  // Not muted: a muted element does not pull audio through the decoder, so audio statistics stay at zero.
   state.video.playsInline = true;
   document.body.append(state.video);
 
@@ -63,12 +66,26 @@ async function connect(options = {}) {
     transceiver.setCodecPreferences(vp8);
   }
 
+  if (options.audio !== 'none') {
+    const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+    if (options.audio === 'pcmu') {
+      const pcmu = RTCRtpReceiver.getCapabilities('audio').codecs.filter((codec) => codec.mimeType === 'audio/PCMU');
+      audioTransceiver.setCodecPreferences(pcmu);
+    }
+  }
+
+  // Audio and video are attached to the same element, so the browser lines them up with each other.
   pc.ontrack = (event) => {
-    state.video.srcObject = event.streams[0] || new MediaStream([event.track]);
+    if (!state.video.srcObject) {
+      state.video.srcObject = new MediaStream();
+    }
+    state.video.srcObject.addTrack(event.track);
   };
 
-  state.channel = pc.createDataChannel('input');
+  // One data channel per purpose: "ping" is echoed back, and "input" carries keyboard, mouse and controller events.
+  state.channel = pc.createDataChannel('ping');
   state.channel.onmessage = (event) => state.echoes.push(event.data);
+  state.inputChannel = pc.createDataChannel('input');
 
   await pc.setLocalDescription();
   await gathered(pc);
@@ -134,10 +151,29 @@ async function stats(handle) {
     frameHeight: 0,
     codec: null,
     fmtp: null,
+    audioPacketsReceived: 0,
+    audioPacketsLost: 0,
+    audioSamplesReceived: 0,
+    audioConcealedSamples: 0,
+    audioEnergy: 0,
+    audioCodec: null,
+    videoPlayoutMs: null,
+    audioPlayoutMs: null,
   };
 
   report.forEach((entry) => {
+    if (entry.type === 'inbound-rtp' && entry.kind === 'audio') {
+      result.audioPacketsReceived = entry.packetsReceived ?? 0;
+      result.audioPacketsLost = entry.packetsLost ?? 0;
+      result.audioSamplesReceived = entry.totalSamplesReceived ?? 0;
+      result.audioConcealedSamples = entry.concealedSamples ?? 0;
+      result.audioEnergy = entry.totalAudioEnergy ?? 0;
+      result.audioPlayoutMs = entry.estimatedPlayoutTimestamp ?? null;
+      const codec = entry.codecId ? report.get(entry.codecId) : null;
+      result.audioCodec = codec ? codec.mimeType : null;
+    }
     if (entry.type === 'inbound-rtp' && entry.kind === 'video') {
+      result.videoPlayoutMs = entry.estimatedPlayoutTimestamp ?? null;
       for (const key of ['framesDecoded', 'keyFramesDecoded', 'framesDropped', 'packetsReceived', 'packetsLost', 'bytesReceived', 'nackCount', 'pliCount', 'frameWidth', 'frameHeight']) {
         result[key] = entry[key] ?? 0;
       }
@@ -263,4 +299,93 @@ function pictureStats(handle) {
   return { mean, stddev: Math.sqrt(Math.max(0, sumSquares / pixels - mean * mean)), distinctColours: colours.size };
 }
 
-window.e2e = { pictureStats, connect, stats, echo, abandon, hangUp, connectionState, receiverCodecs, h264Profiles };
+/**
+ * Start capturing keyboard, mouse and controller input from the page, using the real input module.
+ *
+ * @param {number} handle Session handle from connect().
+ * @returns {Promise<void>} Resolves once the input channel is open and capture has begun.
+ */
+async function startInput(handle) {
+  const state = sessions.get(handle);
+  if (state.inputChannel.readyState !== 'open') {
+    await new Promise((resolve) => {
+      state.inputChannel.addEventListener('open', resolve, { once: true });
+      setTimeout(resolve, 5000);
+    });
+  }
+
+  state.input = new window.e2eInputModule.InputSender({
+    send: (text) => {
+      if (state.inputChannel.readyState === 'open') {
+        state.inputChannel.send(text);
+      }
+    },
+    element: state.video,
+    getGamepads: () => window.e2eGamepads,
+  });
+  state.input.start();
+}
+
+/**
+ * Stop capturing input, releasing anything still held.
+ *
+ * @param {number} handle Session handle from connect().
+ */
+function stopInput(handle) {
+  sessions.get(handle).input.stop();
+}
+
+/**
+ * Switch between relative and absolute mouse movement, as pointer lock would.
+ *
+ * Headless Chrome cannot lock the pointer, so the mode is set directly.
+ *
+ * @param {number} handle Session handle from connect().
+ * @param {boolean} relative Whether to send relative movement.
+ */
+function setRelative(handle, relative) {
+  sessions.get(handle).input.setRelative(relative);
+}
+
+/**
+ * Make the browser report mouse movement, as a locked pointer does with `movementX` and `movementY`.
+ *
+ * @param {number} handle Session handle from connect().
+ * @param {number} dx Horizontal movement.
+ * @param {number} dy Vertical movement.
+ */
+function moveMouseBy(handle, dx, dy) {
+  sessions.get(handle).video.dispatchEvent(new MouseEvent('mousemove', { movementX: dx, movementY: dy, bubbles: true }));
+}
+
+/**
+ * Plug in, change, or unplug a fake controller. Headless Chrome has none of its own.
+ *
+ * @param {number} index Controller slot.
+ * @param {object|null} spec `null` to unplug, or `{buttons: {index: pressed-or-value}, axes: [...]}`.
+ */
+function setGamepad(index, spec) {
+  if (spec === null) {
+    window.e2eGamepads[index] = null;
+    return;
+  }
+  const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+  for (const [button, value] of Object.entries(spec.buttons || {})) {
+    buttons[button] = { pressed: value === true || value >= 0.5, value: value === true ? 1 : value };
+  }
+  window.e2eGamepads[index] = { connected: true, buttons, axes: spec.axes || [0, 0, 0, 0] };
+}
+
+/**
+ * Send raw text on the input channel, bypassing the input module, to test how the host copes with junk.
+ *
+ * @param {number} handle Session handle from connect().
+ * @param {string} text What to send.
+ */
+function sendRawInput(handle, text) {
+  sessions.get(handle).inputChannel.send(text);
+}
+
+window.e2eGamepads = [];
+
+window.e2e = { startInput, stopInput, setRelative, moveMouseBy, setGamepad, sendRawInput, pictureStats, connect, stats, echo, abandon, hangUp, connectionState, receiverCodecs, h264Profiles };

@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { call, scenarios, sleep, until } from './scenarios.mjs';
+import { call, installInput, scenarios, sleep, until } from './scenarios.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const args = Object.fromEntries(process.argv.slice(2).filter((a) => a.startsWith('--')).map((a) => {
@@ -41,9 +41,11 @@ let workDir = null;
 
 /** Stop everything this run started, whatever way it ends. */
 function cleanup() {
+  // Everything here is a test process on a private display, so there is no reason to be polite. A polite
+  // signal is also not enough: Sunshine can ignore it while it is busy shutting down.
   for (const child of children.splice(0).reverse()) {
     try {
-      child.kill('SIGTERM');
+      child.kill('SIGKILL');
     } catch (_) {
       // Already gone.
     }
@@ -130,6 +132,16 @@ class LogHost {
     return false;
   }
 
+  /** Position in the log, to pass to textSince() so a scenario only reads what happened after it began. */
+  lineMark() {
+    return this.lines.length;
+  }
+
+  /** The log since a mark. Sunshine writes one record across several lines, so records are matched on this text. */
+  textSince(mark) {
+    return this.lines.slice(mark).join('\n');
+  }
+
   mark() {
     return this.events.length;
   }
@@ -152,6 +164,65 @@ class LogHost {
 function randomBasePort() {
   return 30000 + Math.floor(Math.random() * 20000);
 }
+
+/**
+ * Scenarios only this tier can run, because they read Sunshine's own log to see what it made of
+ * the browser's packets. Sunshine decodes them with its own code, so this is a check that does not
+ * share any code with the translator that built them.
+ */
+const sunshineScenarios = [
+  {
+    name: "input: Sunshine's own parser reads the browser's packets the way they were meant",
+    async run({ page, host, t }) {
+      const session = await call(page, 'connect', { width: 640, height: 360, fps: 30, bitrate: 2000 });
+      t.check('session accepted', session.ok, session.error);
+      if (!session.ok) {
+        return;
+      }
+      const handle = session.handle;
+      await until(() => call(page, 'stats', handle), (s) => s.framesDecoded >= 10, 20000);
+      await call(page, 'startInput', handle);
+
+      const mark = host.lineMark();
+      await page.keyboard.press('KeyA');
+      await call(page, 'setRelative', handle, true);
+      await call(page, 'moveMouseBy', handle, 7, -3);
+      await call(page, 'setRelative', handle, false);
+      await page.mouse.move(100, 100);
+      await page.mouse.down();
+      await page.mouse.up();
+      await page.mouse.wheel(0, 100);
+
+      // Wait for the last of them to be logged.
+      await until(async () => host.textSince(mark), (text) => /--begin mouse scroll packet--/.test(text), 8000);
+      const log = host.textSince(mark);
+
+      const keys = [...log.matchAll(/--begin keyboard packet--\s+keyAction \[(\w+)\]\s+keyCode \[(\w+)\]/g)];
+      // Action 3 is a press and 4 a release. The code is the Windows virtual key for A, 0x41, with the
+      // high bit Moonlight always sets.
+      t.check(
+        'Sunshine read the key as A, pressed and then released',
+        keys.length === 2 && keys[0][1] === '00000003' && keys[0][2] === '8041' && keys[1][1] === '00000004' && keys[1][2] === '8041',
+        JSON.stringify(keys.map((k) => k.slice(1))),
+      );
+
+      const moves = [...log.matchAll(/--begin relative mouse move packet--\s+deltaX \[(-?\d+)\]\s+deltaY \[(-?\d+)\]/g)];
+      t.check('Sunshine read the relative move as 7 across and 3 up', moves.length === 1 && moves[0][1] === '7' && moves[0][2] === '-3', JSON.stringify(moves.map((m) => m.slice(1))));
+
+      const buttons = [...log.matchAll(/--begin mouse button packet--\s+action \[(\w+)\]\s+button \[(\w+)\]/g)];
+      t.check('Sunshine parsed a button press and release of the left button', buttons.length === 2 && buttons.every((b) => Number.parseInt(b[2], 16) === 1), JSON.stringify(buttons.map((b) => b.slice(1))));
+
+      // One notch down is 100 pixels in the browser, which is -120 to the host.
+      const scrolls = [...log.matchAll(/--begin mouse scroll packet--\s+scrollAmt1 \[(-?\d+)\]/g)];
+      t.check('Sunshine read the scroll as one notch down', scrolls.length === 1 && scrolls[0][1] === '-120', JSON.stringify(scrolls.map((m) => m[1])));
+
+      // The host logs this line whenever it refuses something the browser sent.
+      t.check('nothing the browser sent was refused', !/WebRTC: ignoring browser input/.test(log), (log.match(/.*WebRTC: ignoring browser input.*/) || [''])[0]);
+
+      await call(page, 'hangUp', handle);
+    },
+  },
+];
 
 async function main() {
   const binary = args.sunshine || join(here, '..', '..', 'cmake-build-webrtc', 'sunshine');
@@ -246,7 +317,7 @@ async function main() {
   let failures = 0;
   const results = [];
 
-  for (const scenario of scenarios) {
+  for (const scenario of [...scenarios, ...sunshineScenarios]) {
     if ((scenario.requires || []).length > 0) {
       continue;
     }
@@ -274,6 +345,7 @@ async function main() {
       await page.goto(baseUrl);
       // Evaluated rather than injected as a script tag, so a page Content-Security-Policy cannot block it.
       await page.evaluate(clientSource);
+      await installInput(page);
 
       await Promise.race([
         scenario.run({ page, host, t }),
@@ -303,6 +375,42 @@ async function main() {
     if (exited) {
       console.log('\nSunshine died, so the remaining scenarios cannot run.');
       break;
+    }
+  }
+
+  // The last thing to check is shutting down. A host that hangs on `systemctl stop` whenever someone is
+  // streaming would be a real defect, so stop Sunshine while a browser is still connected and watch how
+  // long it takes. The display stays up until it has gone, which is how a real stop happens.
+  if (exited === null) {
+    const checks = [];
+    const context = await browser.newContext({ ignoreHTTPSErrors: true, httpCredentials: { username, password } });
+    const page = await context.newPage();
+    try {
+      await page.goto(baseUrl);
+      await page.evaluate(clientSource);
+      await installInput(page);
+
+      const session = await call(page, 'connect', { width: 320, height: 240, fps: 15, bitrate: 500 });
+      checks.push({ name: 'a session was streaming when Sunshine was stopped', ok: session.ok, detail: session.error || '' });
+      if (session.ok) {
+        await until(() => call(page, 'stats', session.handle), (s) => s.framesDecoded >= 5, 20000);
+        const stopped = Date.now();
+        sunshine.kill('SIGTERM');
+        const gone = await until(async () => exited !== null, Boolean, 20000);
+        const seconds = (Date.now() - stopped) / 1000;
+        checks.push({ name: 'Sunshine exits within 15 seconds while a browser is streaming', ok: gone.ok && seconds < 15, detail: gone.ok ? `${seconds.toFixed(1)} s` : 'still running after 20 s' });
+      }
+    } catch (error) {
+      checks.push({ name: 'shutdown scenario completed', ok: false, detail: error.message });
+    }
+    await context.close();
+
+    const failed = checks.filter((c) => !c.ok);
+    failures += failed.length;
+    results.push({ scenario: 'shutdown: Sunshine stops promptly with a browser connected', seconds: 0, checks, notes: [] });
+    console.log(`${failed.length === 0 ? 'PASS' : 'FAIL'}  shutdown: Sunshine stops promptly with a browser connected`);
+    for (const check of failed) {
+      console.log(`      x ${check.name}${check.detail ? ` - ${check.detail}` : ''}`);
     }
   }
 

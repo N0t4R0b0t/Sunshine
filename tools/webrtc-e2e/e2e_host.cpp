@@ -42,6 +42,7 @@
 
 // local includes
 #include "src/webrtc/session.h"
+#include "src/webrtc/sink.h"
 
 extern char **environ;
 
@@ -153,6 +154,99 @@ namespace {
   };
 
   /**
+   * @brief Pull Opus packets out of an Ogg stream and hand each to a sink.
+   *
+   * ffmpeg can only write Opus inside an Ogg container, but the browser wants bare packets. An Ogg
+   * page carries a table of segment lengths; a packet ends at the first segment shorter than 255
+   * bytes, and may span pages. The first two packets are stream headers, not audio, and are skipped.
+   */
+  class ogg_opus_splitter_t {
+  public:
+    /**
+     * @brief Create a splitter.
+     *
+     * @param sink Receives each audio packet.
+     */
+    explicit ogg_opus_splitter_t(std::shared_ptr<webrtc::media_sink_t> sink):
+        sink_ {std::move(sink)} {
+    }
+
+    /**
+     * @brief Consume more of the byte stream.
+     *
+     * @param data Bytes read.
+     * @param size Number of bytes.
+     */
+    void feed(const char *data, std::size_t size) {
+      buffer_.insert(buffer_.end(), data, data + size);
+      while (parse_page()) {
+      }
+    }
+
+  private:
+    static constexpr std::size_t page_header_size = 27;  ///< Fixed part of an Ogg page header.
+
+    /**
+     * @brief Consume one whole page if the buffer holds one.
+     *
+     * @return `true` if a page was consumed, so the caller should try again.
+     */
+    bool parse_page() {
+      if (buffer_.size() < page_header_size) {
+        return false;
+      }
+      if (std::memcmp(buffer_.data(), "OggS", 4) != 0) {
+        // Out of step with the stream; drop a byte and look again.
+        buffer_.erase(buffer_.begin());
+        return true;
+      }
+
+      const auto segments = static_cast<std::size_t>(static_cast<std::uint8_t>(buffer_[26]));
+      if (buffer_.size() < page_header_size + segments) {
+        return false;
+      }
+
+      std::size_t body = 0;
+      for (std::size_t i = 0; i < segments; ++i) {
+        body += static_cast<std::uint8_t>(buffer_[page_header_size + i]);
+      }
+      const auto total = page_header_size + segments + body;
+      if (buffer_.size() < total) {
+        return false;
+      }
+
+      std::size_t offset = page_header_size + segments;
+      for (std::size_t i = 0; i < segments; ++i) {
+        const auto length = static_cast<std::size_t>(static_cast<std::uint8_t>(buffer_[page_header_size + i]));
+        packet_.insert(packet_.end(), buffer_.begin() + static_cast<std::ptrdiff_t>(offset), buffer_.begin() + static_cast<std::ptrdiff_t>(offset + length));
+        offset += length;
+        if (length < 255) {
+          deliver();
+          packet_.clear();
+        }
+      }
+
+      buffer_.erase(buffer_.begin(), buffer_.begin() + static_cast<std::ptrdiff_t>(total));
+      return true;
+    }
+
+    /**
+     * @brief Hand the finished packet to the sink, unless it is a stream header.
+     */
+    void deliver() {
+      const std::string_view packet {packet_.data(), packet_.size()};
+      if (packet.starts_with("OpusHead") || packet.starts_with("OpusTags")) {
+        return;
+      }
+      sink_->audio_frame(packet);
+    }
+
+    std::shared_ptr<webrtc::media_sink_t> sink_;  ///< Receives each audio packet.
+    std::vector<char> buffer_;  ///< Bytes not yet parsed.
+    std::vector<char> packet_;  ///< The packet being assembled, which may span pages.
+  };
+
+  /**
    * @brief A stream that plays an ffmpeg test pattern in place of a captured desktop.
    */
   class ffmpeg_stream_t: public webrtc::stream_handle_t {
@@ -165,11 +259,21 @@ namespace {
      * @param die_after_s If positive, make the stream end by itself after this many seconds.
      */
     ffmpeg_stream_t(const webrtc::stream_request_t &request, std::shared_ptr<webrtc::media_sink_t> sink, int die_after_s):
-        splitter_ {std::move(sink)} {
+        splitter_ {sink},
+        audio_splitter_ {sink} {
       int fds[2];
       if (pipe(fds) != 0) {
         return;
       }
+
+      // ffmpeg writes audio to file descriptor 3. Move our end well clear of it so the redirect below
+      // cannot collide with it.
+      int audio_fds[2];
+      if (pipe(audio_fds) != 0) {
+        return;
+      }
+      const int audio_write_fd = fcntl(audio_fds[1], F_DUPFD, 10);
+      close(audio_fds[1]);
 
       const auto size = std::to_string(request.width) + "x" + std::to_string(request.height);
       const auto source = "testsrc2=size=" + size + ":rate=" + std::to_string(request.fps);
@@ -185,6 +289,13 @@ namespace {
         "lavfi",
         "-i",
         source,
+        "-re",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-map",
+        "0:v",
         "-c:v",
         "libx264",
         "-profile:v",
@@ -203,7 +314,22 @@ namespace {
         "h264_metadata=aud=insert",
         "-f",
         "h264",
-        "-",
+        "pipe:1",
+        "-map",
+        "1:a",
+        "-c:a",
+        "libopus",
+        "-ac",
+        "2",
+        "-b:a",
+        "96k",
+        "-frame_duration",
+        std::to_string(webrtc::audio_packet_duration_ms),
+        "-application",
+        "lowdelay",
+        "-f",
+        "ogg",
+        "pipe:3",
       };
       std::vector<char *> argv;
       for (auto &arg : args) {
@@ -214,17 +340,34 @@ namespace {
       posix_spawn_file_actions_t actions;
       posix_spawn_file_actions_init(&actions);
       posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+      posix_spawn_file_actions_adddup2(&actions, audio_write_fd, 3);
       posix_spawn_file_actions_addclose(&actions, fds[0]);
       posix_spawn_file_actions_addclose(&actions, fds[1]);
+      posix_spawn_file_actions_addclose(&actions, audio_fds[0]);
+      posix_spawn_file_actions_addclose(&actions, audio_write_fd);
 
       const auto status = posix_spawnp(&pid_, "ffmpeg", &actions, nullptr, argv.data(), environ);
       posix_spawn_file_actions_destroy(&actions);
       close(fds[1]);
+      close(audio_write_fd);
       if (status != 0) {
         close(fds[0]);
+        close(audio_fds[0]);
         pid_ = 0;
         return;
       }
+
+      audio_fd_ = audio_fds[0];
+      audio_reader_ = std::thread {[this]() {
+        char chunk[1 << 14];
+        while (!stopped_) {
+          const auto got = read(audio_fd_, chunk, sizeof(chunk));
+          if (got <= 0) {
+            break;
+          }
+          audio_splitter_.feed(chunk, static_cast<std::size_t>(got));
+        }
+      }};
 
       read_fd_ = fds[0];
       alive_ = true;
@@ -262,6 +405,12 @@ namespace {
       if (reader_.joinable()) {
         reader_.join();
       }
+      if (audio_reader_.joinable()) {
+        audio_reader_.join();
+      }
+      if (audio_fd_ >= 0) {
+        close(audio_fd_);
+      }
       if (killer_.joinable()) {
         killer_.join();
       }
@@ -298,6 +447,21 @@ namespace {
       event("keyframe_requested");
     }
 
+    /**
+     * @brief Record an input packet, as hex, for the test to check.
+     *
+     * @param packet The Moonlight input packet the browser sent.
+     */
+    void send_input(std::vector<std::uint8_t> &&packet) override {
+      static constexpr char digits[] = "0123456789abcdef";
+      std::string hex;
+      for (const auto byte : packet) {
+        hex += digits[byte >> 4];
+        hex += digits[byte & 0x0f];
+      }
+      event("input", hex);
+    }
+
   private:
     /**
      * @brief Ask ffmpeg to exit, once.
@@ -309,7 +473,10 @@ namespace {
       }
     }
 
-    access_unit_splitter_t splitter_;  ///< Cuts ffmpeg's output into frames.
+    access_unit_splitter_t splitter_;  ///< Cuts ffmpeg's video output into frames.
+    ogg_opus_splitter_t audio_splitter_;  ///< Cuts ffmpeg's audio output into packets.
+    int audio_fd_ = -1;  ///< Read end of ffmpeg's audio output.
+    std::thread audio_reader_;  ///< Reads ffmpeg's audio output.
     pid_t pid_ = 0;  ///< The ffmpeg process.
     int read_fd_ = -1;  ///< Read end of ffmpeg's output.
     std::atomic_bool alive_ {false};  ///< Whether ffmpeg is still producing output.
