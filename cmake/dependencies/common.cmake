@@ -24,6 +24,21 @@ add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/lizardbyte-common")
 # libdisplaydevice
 add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libdisplaydevice")
 
+# libdatachannel, the WebRTC transport used by the browser streaming client.
+# This must come after find_package(OpenSSL) above so it resolves the same OpenSSL we do.
+if(SUNSHINE_ENABLE_WEBRTC)
+    # libdatachannel defaults BUILD_SHARED_LIBS to ON for itself. Override it for the
+    # subdirectory only, then restore, so the rest of the build keeps its own linkage.
+    set(_sunshine_prior_build_shared_libs "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS OFF)
+    set(NO_EXAMPLES ON)
+    set(NO_TESTS ON)
+    set(NO_WEBSOCKET ON)  # signaling rides on Sunshine's existing HTTPS server instead
+    add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libdatachannel")
+    set(BUILD_SHARED_LIBS "${_sunshine_prior_build_shared_libs}")
+    unset(_sunshine_prior_build_shared_libs)
+endif()
+
 if(SUNSHINE_ENABLE_TRAY)
     if(SUNSHINE_USE_STATIC_QT)
         set(_sunshine_find_library_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
