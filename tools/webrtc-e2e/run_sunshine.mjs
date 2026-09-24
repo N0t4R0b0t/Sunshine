@@ -284,14 +284,22 @@ async function main() {
   ];
   writeFileSync(join(workDir, 'apps.json'), JSON.stringify({ env: {}, apps: [] }));
 
-  const creds = spawnSync(binary, [...options, '--creds', username, password], { env, encoding: 'utf8' });
+  // GET /api/config reads config::sunshine.config_file straight off disk (see confighttp::getConfig),
+  // not the in-memory settings these key=value CLI arguments already apply, so it would otherwise
+  // report every one of them as absent - which the real Stream.vue page reads as "feature disabled".
+  // Writing the same values into a real config file, the way a user's own config always exists, keeps
+  // that endpoint honest without duplicating the meaning of any setting here.
+  const configFile = join(workDir, 'sunshine.conf');
+  writeFileSync(configFile, options.map((option) => option.replace('=', ' = ')).join('\n') + '\n');
+
+  const creds = spawnSync(binary, [configFile, ...options, '--creds', username, password], { env, encoding: 'utf8' });
   if (creds.status !== 0) {
     console.error(`could not set credentials (exit ${creds.status})\n${creds.stdout}\n${creds.stderr}`);
     process.exit(2);
   }
 
   const host = new LogHost();
-  const sunshine = launch(binary, options, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const sunshine = launch(binary, [configFile, ...options], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   host.attach(sunshine.stdout);
   host.attach(sunshine.stderr);
   let exited = null;
@@ -375,6 +383,74 @@ async function main() {
     if (exited) {
       console.log('\nSunshine died, so the remaining scenarios cannot run.');
       break;
+    }
+  }
+
+  // Exercise the real page that ships in the product (Stream.vue), not the synthetic client the
+  // scenarios above use, so a mistake in the page itself - not just in the modules it is built from -
+  // would be caught.
+  if (exited === null) {
+    const checks = [];
+    const started = Date.now();
+    const context = await browser.newContext({ ignoreHTTPSErrors: true, httpCredentials: { username, password } });
+    const page = await context.newPage();
+    page.on('pageerror', (err) => checks.push({ name: 'the real page had no script errors', ok: false, detail: err.message }));
+    try {
+      await page.goto(`${baseUrl}stream`);
+
+      const connectButton = page.getByRole('button', { name: 'Connect' });
+      const formVisible = await connectButton.isVisible({ timeout: 10000 }).catch(() => false);
+      checks.push({ name: 'the real streaming page loaded with the feature enabled', ok: formVisible });
+
+      if (formVisible) {
+        await connectButton.click();
+
+        const decoding = await page
+          .waitForFunction(
+            () => {
+              const el = document.querySelector('video.stream-video');
+              return el && el.videoWidth > 0;
+            },
+            { timeout: 20000 },
+          )
+          .then(() => true)
+          .catch(() => false);
+        checks.push({ name: 'the real page decodes real video', ok: decoding });
+
+        if (decoding) {
+          const mark = host.lineMark();
+          await page.click('.stream-overlay-click');
+
+          // Headless Chrome has no real pointing device, so real Pointer Lock free-runs with jitter
+          // once engaged, flooding the ordered data channel and starving out the key packets below.
+          // Releasing it, exactly as a real Escape press would, is what a genuine session recovers
+          // with, and clicking to control already proved the pointer lock call path did not throw.
+          await page.evaluate(() => document.exitPointerLock?.());
+          await sleep(200);
+
+          await page.keyboard.press('KeyA');
+
+          // 0x8041 is the A key with Moonlight's high bit set, read from Sunshine's own log, the same
+          // way the synthetic-page input scenario above verifies it.
+          const sawKey = await until(async () => /keyCode \[8041\]/.test(host.textSince(mark)), Boolean, 5000);
+          checks.push({ name: 'a real key press from the real page reaches Sunshine', ok: sawKey.ok });
+
+          await page.getByTitle('Disconnect').click();
+          const sawClose = await until(async () => /WebRTC: closed browser session/.test(host.textSince(mark)), Boolean, 5000);
+          checks.push({ name: 'disconnecting from the real page ends the session', ok: sawClose.ok });
+        }
+      }
+    } catch (error) {
+      checks.push({ name: 'real page scenario completed', ok: false, detail: error.message });
+    }
+    await context.close();
+
+    const failed = checks.filter((c) => !c.ok);
+    failures += failed.length;
+    results.push({ scenario: 'the real Stream.vue page', seconds: (Date.now() - started) / 1000, checks, notes: [] });
+    console.log(`${failed.length === 0 ? 'PASS' : 'FAIL'}  the real Stream.vue page  (${((Date.now() - started) / 1000).toFixed(1)}s)`);
+    for (const check of failed) {
+      console.log(`      x ${check.name}${check.detail ? ` - ${check.detail}` : ''}`);
     }
   }
 
