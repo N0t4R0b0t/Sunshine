@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { buildSessionRequest, StreamConnection, summarizeStats } from '../../src_assets/common/assets/web/stream/connection.js'
+import { buildSessionRequest, selectVideoCodecs, StreamConnection, summarizeStats } from '../../src_assets/common/assets/web/stream/connection.js'
 
 describe('buildSessionRequest', () => {
   it('always carries the offer type and SDP', () => {
@@ -38,6 +38,47 @@ function statsReport(entries) {
   const map = new Map(entries.map((entry) => [entry.id, entry]))
   return map
 }
+
+/** A codec capability entry the way `RTCRtpReceiver.getCapabilities('video').codecs` reports it. */
+const codec = (mimeType, sdpFmtpLine) => ({ mimeType, clockRate: 90000, sdpFmtpLine })
+
+describe('selectVideoCodecs', () => {
+  const allCodecs = [
+    codec('video/VP8'),
+    codec('video/VP9', 'profile-id=0'),
+    codec('video/H264', 'packetization-mode=1;profile-level-id=42e01f'),
+    codec('video/H264', 'packetization-mode=1;profile-level-id=64001f'),
+    codec('video/AV1', 'profile=0'),
+    codec('video/AV1', 'profile=1'),
+    codec('video/red'),
+  ]
+
+  it('offers only H.264 by default, dropping every other codec the browser supports', () => {
+    const chosen = selectVideoCodecs(allCodecs, undefined)
+    expect(chosen.every((c) => c.mimeType === 'video/H264')).toBe(true)
+    expect(chosen).toHaveLength(2)
+  })
+
+  it('offers only H.264 when explicitly asked for it', () => {
+    expect(selectVideoCodecs(allCodecs, 'h264').every((c) => c.mimeType === 'video/H264')).toBe(true)
+  })
+
+  it('offers only AV1 when AV1 is requested, deliberately with no H.264 fallback', () => {
+    const chosen = selectVideoCodecs(allCodecs, 'av1')
+    expect(chosen.every((c) => c.mimeType === 'video/AV1')).toBe(true)
+    expect(chosen).toHaveLength(2)
+  })
+
+  it('offers nothing, rather than quietly falling back to H.264, when AV1 was asked for but the browser has none', () => {
+    const noAv1 = allCodecs.filter((c) => c.mimeType !== 'video/AV1')
+    expect(selectVideoCodecs(noAv1, 'av1')).toEqual([])
+  })
+
+  it('returns nothing rather than throwing when the browser reports no usable codec at all', () => {
+    expect(selectVideoCodecs([codec('video/VP8')], 'h264')).toEqual([])
+    expect(selectVideoCodecs([], 'av1')).toEqual([])
+  })
+})
 
 describe('summarizeStats', () => {
   it('reports nothing when the report has nothing', () => {
@@ -137,7 +178,7 @@ class FakePeerConnection extends EventTarget {
   addTransceiver(kind, init) {
     // playoutDelayHint must be a real, present key (even if undefined), the way a browser that
     // supports it always has the property - only the "unsupported browser" test below omits it.
-    const transceiver = { kind, init, receiver: { playoutDelayHint: undefined } }
+    const transceiver = { kind, init, receiver: { playoutDelayHint: undefined }, setCodecPreferences: vi.fn() }
     this.transceivers.push(transceiver)
     return transceiver
   }
@@ -202,14 +243,30 @@ function fakeFetch(json, status = 200) {
 
 describe('StreamConnection', () => {
   const originalRTCPeerConnection = globalThis.RTCPeerConnection
+  const originalRTCRtpReceiver = globalThis.RTCRtpReceiver
 
   afterEach(() => {
     globalThis.RTCPeerConnection = originalRTCPeerConnection
+    globalThis.RTCRtpReceiver = originalRTCRtpReceiver
     FakePeerConnection.instances = []
   })
 
-  function install() {
+  /**
+   * @param {object} [options]
+   * @param {RTCRtpCodecCapability[]} [options.videoCodecs] What the fake browser reports having;
+   *   defaults to H.264 and AV1, matching real Chrome.
+   * @param {boolean} [options.capabilitiesSupported] `false` simulates a browser (like Firefox) with
+   *   no `RTCRtpReceiver.getCapabilities` at all.
+   */
+  function install({ videoCodecs, capabilitiesSupported = true } = {}) {
     globalThis.RTCPeerConnection = FakePeerConnection
+    if (capabilitiesSupported) {
+      globalThis.RTCRtpReceiver = {
+        getCapabilities: (kind) => (kind === 'video' ? { codecs: videoCodecs ?? [codec('video/H264', 'packetization-mode=1;profile-level-id=64001f'), codec('video/AV1', 'profile=0')] } : { codecs: [] }),
+      }
+    } else {
+      globalThis.RTCRtpReceiver = undefined
+    }
   }
 
   it('opens a session and applies the host answer', async () => {
@@ -239,6 +296,73 @@ describe('StreamConnection', () => {
     for (const transceiver of connection.pc.transceivers) {
       expect(transceiver.init.direction).toBe('recvonly')
     }
+  })
+
+  it('restricts the video offer to H.264 by default', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open()
+
+    const [videoTransceiver] = connection.pc.transceivers
+    expect(videoTransceiver.setCodecPreferences).toHaveBeenCalledTimes(1)
+    const [offered] = videoTransceiver.setCodecPreferences.mock.calls[0]
+    expect(offered.every((c) => c.mimeType === 'video/H264')).toBe(true)
+  })
+
+  it('offers only AV1, deliberately with no H.264 fallback, when asked for AV1', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open({ codec: 'av1' })
+
+    const [videoTransceiver] = connection.pc.transceivers
+    const [offered] = videoTransceiver.setCodecPreferences.mock.calls[0]
+    expect(offered.every((c) => c.mimeType === 'video/AV1')).toBe(true)
+  })
+
+  it('refuses locally, without ever contacting the host, when AV1 was requested but the browser has none', async () => {
+    install({ videoCodecs: [codec('video/H264', 'packetization-mode=1;profile-level-id=64001f')] })
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+
+    await expect(connection.open({ codec: 'av1' })).rejects.toThrow('AV1')
+    expect(fetch).not.toHaveBeenCalled()
+    expect(connection.pc).toBeNull()
+    expect(FakePeerConnection.instances[0].closed).toBe(true)
+  })
+
+  it('never leaves setCodecPreferences uncalled just because the audio transceiver has no video codecs', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open()
+
+    const audioTransceiver = connection.pc.transceivers.find((t) => t.kind === 'audio')
+    expect(audioTransceiver.setCodecPreferences).not.toHaveBeenCalled()
+  })
+
+  it('does not throw, and simply offers whatever the default is, when the browser has no capability query at all', async () => {
+    install({ capabilitiesSupported: false })
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await expect(connection.open()).resolves.toBeUndefined()
+    const [videoTransceiver] = connection.pc.transceivers
+    expect(videoTransceiver.setCodecPreferences).not.toHaveBeenCalled()
+  })
+
+  it('does not throw when the browser reports capabilities but the transceiver itself cannot set preferences', async () => {
+    install()
+    globalThis.RTCPeerConnection = class extends FakePeerConnection {
+      addTransceiver(kind, init) {
+        const transceiver = super.addTransceiver(kind, init)
+        delete transceiver.setCodecPreferences
+        return transceiver
+      }
+    }
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await expect(connection.open()).resolves.toBeUndefined()
   })
 
   it('asks for low-latency playout on both receivers when the browser supports it', async () => {

@@ -21,7 +21,7 @@
 
 namespace webrtc {
   /**
-   * @brief Sends encoded H.264 video and Opus audio to a browser as RTP.
+   * @brief Sends encoded video (H.264 or AV1) and Opus audio to a browser as RTP.
    *
    * Video frames are dropped until the browser's track is open and a keyframe arrives, so the browser
    * never starts decoding mid-GOP. Loss recovery is handled here: NACKs are answered from a
@@ -33,11 +33,12 @@ namespace webrtc {
      * @brief Create a sink that sends video on a track.
      *
      * @param track Video track negotiated with the browser.
-     * @param payload_type RTP payload type negotiated for H.264.
+     * @param codec Codec the track was negotiated for.
+     * @param payload_type RTP payload type negotiated for the video codec.
      * @param ssrc RTP synchronization source announced in the SDP.
      * @return The sink, with its media handlers and callbacks installed.
      */
-    static std::shared_ptr<rtc_media_sink_t> create(std::shared_ptr<rtc::Track> track, std::uint8_t payload_type, std::uint32_t ssrc);
+    static std::shared_ptr<rtc_media_sink_t> create(std::shared_ptr<rtc::Track> track, video_codec_e codec, std::uint8_t payload_type, std::uint32_t ssrc);
 
     /**
      * @brief Also send audio, on a second track.
@@ -62,7 +63,7 @@ namespace webrtc {
     /**
      * @brief Packetize and send one video frame.
      *
-     * @param payload Annex-B bitstream.
+     * @param payload One encoded frame, in the byte layout the negotiated codec (see create()) uses.
      * @param idr Whether this frame is a keyframe.
      * @param frame_index Encoder frame index.
      */
@@ -89,10 +90,11 @@ namespace webrtc {
     /**
      * @brief Install the packetizer chain and callbacks on the track.
      *
-     * @param payload_type RTP payload type negotiated for H.264.
+     * @param codec Codec the track was negotiated for.
+     * @param payload_type RTP payload type negotiated for the video codec.
      * @param ssrc RTP synchronization source announced in the SDP.
      */
-    void attach(std::uint8_t payload_type, std::uint32_t ssrc);
+    void attach(video_codec_e codec, std::uint8_t payload_type, std::uint32_t ssrc);
 
     /**
      * @brief Ask the encoder for a keyframe, if a requester is set.

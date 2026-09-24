@@ -16,10 +16,10 @@ namespace webrtc {
     constexpr auto keyframe_retry_interval = 500ms;  ///< Minimum gap between keyframe requests while waiting to start.
   }  // namespace
 
-  std::shared_ptr<rtc_media_sink_t> rtc_media_sink_t::create(std::shared_ptr<rtc::Track> track, std::uint8_t payload_type, std::uint32_t ssrc) {
+  std::shared_ptr<rtc_media_sink_t> rtc_media_sink_t::create(std::shared_ptr<rtc::Track> track, video_codec_e codec, std::uint8_t payload_type, std::uint32_t ssrc) {
     // The constructor is private, so make_shared cannot be used.
     std::shared_ptr<rtc_media_sink_t> sink {new rtc_media_sink_t {std::move(track)}};
-    sink->attach(payload_type, ssrc);
+    sink->attach(codec, payload_type, ssrc);
     return sink;
   }
 
@@ -27,11 +27,21 @@ namespace webrtc {
       track_ {std::move(track)} {
   }
 
-  void rtc_media_sink_t::attach(std::uint8_t payload_type, std::uint32_t ssrc) {
+  void rtc_media_sink_t::attach(video_codec_e codec, std::uint8_t payload_type, std::uint32_t ssrc) {
+    // Both codecs use the same 90 kHz RTP clock; only the packetizer that turns a frame into RTP
+    // packets depends on which one was negotiated.
     auto rtp_config = std::make_shared<rtc::RtpPacketizationConfig>(ssrc, "sunshine", payload_type, rtc::H264RtpPacketizer::ClockRate);
 
-    // The encoder's output uses Annex-B start codes between NAL units.
-    auto packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, rtp_config);
+    std::shared_ptr<rtc::RtpPacketizer> packetizer;
+    if (codec == video_codec_e::av1) {
+      // The encoder's output is a low-overhead OBU stream: one whole temporal unit (frame) per call,
+      // which the packetizer itself splits into individual, correctly length-prefixed OBUs. This is
+      // not Annex-B, and has nothing in common with the H.264 path below beyond both ending up as RTP.
+      packetizer = std::make_shared<rtc::AV1RtpPacketizer>(rtc::AV1RtpPacketizer::Packetization::TemporalUnit, rtp_config);
+    } else {
+      // The encoder's output uses Annex-B start codes between NAL units.
+      packetizer = std::make_shared<rtc::H264RtpPacketizer>(rtc::NalUnit::Separator::StartSequence, rtp_config);
+    }
 
     // Sender reports let the browser line up video with audio.
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtp_config));
