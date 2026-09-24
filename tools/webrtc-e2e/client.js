@@ -82,10 +82,13 @@ async function connect(options = {}) {
     state.video.srcObject.addTrack(event.track);
   };
 
-  // One data channel per purpose: "ping" is echoed back, and "input" carries keyboard, mouse and controller events.
+  // One data channel per purpose, matching the real page: "ping" is echoed back, "input" carries
+  // keyboard, mouse buttons and controller events reliably, and "input-motion" carries mouse and stick
+  // motion unreliably, since a dropped position update is superseded by the next one moments later.
   state.channel = pc.createDataChannel('ping');
   state.channel.onmessage = (event) => state.echoes.push(event.data);
   state.inputChannel = pc.createDataChannel('input');
+  state.motionChannel = pc.createDataChannel('input-motion', { ordered: false, maxRetransmits: 0 });
 
   await pc.setLocalDescription();
   await gathered(pc);
@@ -318,6 +321,11 @@ async function startInput(handle) {
     send: (text) => {
       if (state.inputChannel.readyState === 'open') {
         state.inputChannel.send(text);
+      }
+    },
+    sendMotion: (text) => {
+      if (state.motionChannel.readyState === 'open') {
+        state.motionChannel.send(text);
       }
     },
     element: state.video,
