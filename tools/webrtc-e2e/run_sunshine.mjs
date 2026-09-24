@@ -435,6 +435,19 @@ async function main() {
           const sawKey = await until(async () => /keyCode \[8041\]/.test(host.textSince(mark)), Boolean, 5000);
           checks.push({ name: 'a real key press from the real page reaches Sunshine', ok: sawKey.ok });
 
+          // The Moonlight-style local shortcuts must act on the page itself, not be forwarded to
+          // Sunshine as a keystroke. The Ctrl/Alt/Shift modifiers themselves legitimately still reach
+          // the host as ordinary key presses while they are held - there is no way to know a shortcut
+          // is being formed until the final key lands, and real Moonlight has this exact same
+          // behavior - so only the trigger key itself (S, 0x8053 with Moonlight's high bit) must be
+          // absent, not "keyCode" generally.
+          const statsBefore = await page.locator('.stream-stats').count();
+          const shortcutMark = host.lineMark();
+          await page.keyboard.press('Control+Alt+Shift+KeyS');
+          await sleep(300);
+          checks.push({ name: 'Ctrl+Alt+Shift+S toggles the stats overlay locally', ok: (await page.locator('.stream-stats').count()) !== statsBefore });
+          checks.push({ name: 'the S keystroke itself was not forwarded to Sunshine', ok: !/keyCode \[8053\]/.test(host.textSince(shortcutMark)) });
+
           await page.getByTitle('Disconnect').click();
           const sawClose = await until(async () => /WebRTC: closed browser session/.test(host.textSince(mark)), Boolean, 5000);
           checks.push({ name: 'disconnecting from the real page ends the session', ok: sawClose.ok });
