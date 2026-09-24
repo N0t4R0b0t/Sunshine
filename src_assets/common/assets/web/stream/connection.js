@@ -120,6 +120,7 @@ export class StreamConnection {
     this.id = null
     this.pc = null
     this.inputChannel = null
+    this.motionChannel = null
     this.pingChannel = null
 
     /** @type {((track: MediaStreamTrack) => void)|null} Called for each track the host sends. */
@@ -148,8 +149,14 @@ export class StreamConnection {
     const pc = new RTCPeerConnection(config)
     this.pc = pc
 
-    pc.addTransceiver('video', { direction: 'recvonly' })
-    pc.addTransceiver('audio', { direction: 'recvonly' })
+    for (const transceiver of [pc.addTransceiver('video', { direction: 'recvonly' }), pc.addTransceiver('audio', { direction: 'recvonly' })]) {
+      // Ask Chrome to play out frames as soon as they arrive rather than holding a buffer to smooth
+      // over jitter, which is the right trade for a host on the same network. Firefox has no
+      // equivalent yet, so it keeps its default buffering.
+      if ('playoutDelayHint' in transceiver.receiver) {
+        transceiver.receiver.playoutDelayHint = 0
+      }
+    }
 
     pc.addEventListener('track', (event) => {
       this.onTrack?.(event.track)
@@ -160,6 +167,13 @@ export class StreamConnection {
 
     this.inputChannel = pc.createDataChannel('input')
     this.inputChannel.addEventListener('open', () => this.onInputChannelOpen?.())
+
+    // Mouse and stick motion is a continuous stream of state, where a dropped update just gets
+    // superseded by the next one a few milliseconds later. Sending it reliably and in order, like the
+    // "input" channel above, would instead make a lost packet block every update behind it until it is
+    // retransmitted - the opposite of what continuous motion needs.
+    this.motionChannel = pc.createDataChannel('input-motion', { ordered: false, maxRetransmits: 0 })
+
     this.pingChannel = pc.createDataChannel('ping')
 
     await pc.setLocalDescription()
@@ -200,6 +214,18 @@ export class StreamConnection {
   }
 
   /**
+   * Send a message on the unreliable motion data channel, used for continuous mouse and stick state
+   * where a dropped update does not need retransmission.
+   *
+   * @param {string} text The message, already encoded (see `stream/input.js`).
+   */
+  sendMotion(text) {
+    if (this.motionChannel?.readyState === 'open') {
+      this.motionChannel.send(text)
+    }
+  }
+
+  /**
    * Read the connection's current statistics.
    *
    * @returns {Promise<object>} See summarizeStats(). Empty numbers if there is no connection.
@@ -222,6 +248,7 @@ export class StreamConnection {
     this.id = null
     this.pc = null
     this.inputChannel = null
+    this.motionChannel = null
     this.pingChannel = null
 
     if (pc) {

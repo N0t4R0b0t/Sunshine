@@ -32,7 +32,8 @@ namespace webrtc {
     constexpr auto connect_timeout = 30s;  ///< How long a session may sit unconnected before it is reaped.
     constexpr auto reap_interval = 1s;  ///< How often finished sessions are cleaned up.
     constexpr auto ping_channel_label = "ping"sv;  ///< Label of the data channel that echoes, for measuring latency.
-    constexpr auto input_channel_label = "input"sv;  ///< Label of the data channel that carries keyboard, mouse and controller input.
+    constexpr auto input_channel_label = "input"sv;  ///< Label of the reliable data channel that carries keyboard, mouse buttons and controller input.
+    constexpr auto input_motion_channel_label = "input-motion"sv;  ///< Label of the unreliable data channel for mouse and stick motion, which a dropped update needs no retransmission for.
     const std::string media_stream_id {"sunshine"};  ///< Stream that the video and audio tracks both belong to, so a browser keeps them in sync.
 
     /**
@@ -499,7 +500,9 @@ namespace webrtc {
               locked->send(std::move(message));
             }
           });
-        } else if (label == input_channel_label) {
+        } else if (label == input_channel_label || label == input_motion_channel_label) {
+          // Both channels carry the same JSON messages and are routed identically; only their
+          // reliability differs, which the browser chose when it created each one.
           channel->onMessage([state](rtc::message_variant message) {
             std::string error;
             const auto *text = std::get_if<std::string>(&message);

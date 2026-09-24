@@ -135,14 +135,17 @@ class FakePeerConnection extends EventTarget {
   }
 
   addTransceiver(kind, init) {
-    const transceiver = { kind, init }
+    // playoutDelayHint must be a real, present key (even if undefined), the way a browser that
+    // supports it always has the property - only the "unsupported browser" test below omits it.
+    const transceiver = { kind, init, receiver: { playoutDelayHint: undefined } }
     this.transceivers.push(transceiver)
     return transceiver
   }
 
-  createDataChannel(label) {
+  createDataChannel(label, init) {
     const channel = new EventTarget()
     channel.label = label
+    channel.init = init
     channel.readyState = 'connecting'
     channel.send = vi.fn()
     channel.open = () => {
@@ -236,6 +239,67 @@ describe('StreamConnection', () => {
     for (const transceiver of connection.pc.transceivers) {
       expect(transceiver.init.direction).toBe('recvonly')
     }
+  })
+
+  it('asks for low-latency playout on both receivers when the browser supports it', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open()
+
+    for (const transceiver of connection.pc.transceivers) {
+      expect(transceiver.receiver.playoutDelayHint).toBe(0)
+    }
+  })
+
+  it('does not fail when the browser has no playoutDelayHint support', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+
+    // Replace addTransceiver just for this test with one whose receiver has no playoutDelayHint
+    // property at all, the way a browser without that (Chrome-only) API would behave.
+    const original = FakePeerConnection.prototype.addTransceiver
+    FakePeerConnection.prototype.addTransceiver = function (kind, init) {
+      const transceiver = { kind, init, receiver: Object.freeze({}) }
+      this.transceivers.push(transceiver)
+      return transceiver
+    }
+    try {
+      await expect(connection.open()).resolves.toBeUndefined()
+    } finally {
+      FakePeerConnection.prototype.addTransceiver = original
+    }
+  })
+
+  it('creates a separate unreliable, unordered channel for motion', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open()
+
+    expect(connection.motionChannel.label).toBe('input-motion')
+    expect(connection.motionChannel.init).toEqual({ ordered: false, maxRetransmits: 0 })
+  })
+
+  it('sends on the motion channel only once it is open', async () => {
+    install()
+    const fetch = fakeFetch({ status: true, id: 'x', sdp: 'sdp' })
+    const connection = new StreamConnection({ fetch })
+    await connection.open()
+
+    connection.sendMotion('too-early')
+    expect(connection.motionChannel.send).not.toHaveBeenCalled()
+
+    connection.motionChannel.open()
+    connection.sendMotion('mr')
+    expect(connection.motionChannel.send).toHaveBeenCalledWith('mr')
+  })
+
+  it('sends nothing on either input channel before a connection exists', () => {
+    const connection = new StreamConnection({ fetch: fakeFetch({}) })
+    expect(() => connection.sendInput('x')).not.toThrow()
+    expect(() => connection.sendMotion('x')).not.toThrow()
   })
 
   it('passes a configured STUN server to the peer connection', async () => {
@@ -333,6 +397,8 @@ describe('StreamConnection', () => {
     expect(pc.closed).toBe(true)
     expect(connection.pc).toBeNull()
     expect(connection.id).toBeNull()
+    expect(connection.inputChannel).toBeNull()
+    expect(connection.motionChannel).toBeNull()
   })
 
   it('closes locally even if telling the host fails', async () => {

@@ -1,6 +1,6 @@
 <template>
-  <Navbar></Navbar>
-  <div id="content" class="container-fluid">
+  <Navbar v-if="phase === 'setup'"></Navbar>
+  <div id="content" :class="phase === 'setup' ? 'container-fluid' : 'stream-fullpage'">
     <div v-if="!checkedConfig" class="container my-4">
       {{ $t('_common.loading') }}
     </div>
@@ -67,8 +67,16 @@
     </div>
 
     <!-- Connecting / connected -->
-    <div v-else class="stream-view">
-      <video ref="video" class="stream-video" autoplay playsinline @click="onVideoClick"></video>
+    <div v-else class="stream-view" :class="{ 'stream-hide-cursor': controlling && !mouseLocked }">
+      <video ref="video" class="stream-video" autoplay playsinline></video>
+
+      <div
+        v-if="localCursor"
+        class="local-cursor"
+        :style="{ left: localCursor.clientX + 'px', top: localCursor.clientY + 'px' }"
+      >
+        <mouse-pointer-2 :size="20"></mouse-pointer-2>
+      </div>
 
       <div v-if="phase === 'connecting'" class="stream-overlay">
         <div class="spinner-border text-light mb-3" role="status"></div>
@@ -78,13 +86,24 @@
       <div v-else-if="!controlling" class="stream-overlay stream-overlay-click" @click="startControlling">
         <mouse-pointer-click :size="48" class="mb-3"></mouse-pointer-click>
         <div>{{ $t('stream.click_to_control') }}</div>
+        <div class="stream-shortcuts-hint">{{ $t('stream.shortcuts_hint') }}</div>
       </div>
 
       <div v-if="phase === 'connected'" class="stream-toolbar">
+        <button
+          v-if="controlling"
+          type="button"
+          class="btn btn-sm"
+          :class="mouseLocked ? 'btn-primary' : 'btn-secondary'"
+          @click="toggleMouseLock"
+          :title="mouseLocked ? $t('stream.unlock_mouse') : $t('stream.lock_mouse')"
+        >
+          <crosshair :size="16"></crosshair>
+        </button>
         <button type="button" class="btn btn-sm btn-secondary" @click="toggleFullscreen" :title="$t('stream.fullscreen')">
           <maximize :size="16"></maximize>
         </button>
-        <button type="button" class="btn btn-sm btn-secondary" @click="showStats = !showStats" :title="$t('stream.stats')">
+        <button type="button" class="btn btn-sm btn-secondary" @click="toggleStats" :title="$t('stream.stats')">
           <activity :size="16"></activity>
         </button>
         <button type="button" class="btn btn-sm btn-danger" @click="disconnect" :title="$t('stream.disconnect')">
@@ -118,7 +137,7 @@
 
 <script>
 import { markRaw } from 'vue'
-import { Activity, AlertTriangle, Maximize, MousePointerClick, Play, Square } from '@lucide/vue'
+import { Activity, AlertTriangle, Crosshair, Maximize, MousePointer2, MousePointerClick, Play, Square } from '@lucide/vue'
 import Navbar from './Navbar.vue'
 import { apiFetch } from './fetch_utils'
 import { StreamConnection } from './stream/connection.js'
@@ -135,6 +154,20 @@ const RESOLUTION_PRESETS = [
 /** How often the stats overlay refreshes while visible. */
 const STATS_INTERVAL_MS = 1000
 
+/**
+ * Local page shortcuts, keyed by `KeyboardEvent.code`, all held with Ctrl+Alt+Shift together as
+ * Moonlight's own desktop clients use. These are intercepted here and never forwarded to the host as
+ * keystrokes. Moonlight also binds M (toggle the host cursor's visibility) and N (minimize); neither
+ * has a browser equivalent - there is no way for a page to hide only the video's cursor rendering
+ * decision made by the host, and browsers deliberately do not let a page minimize its own window.
+ */
+const SHORTCUT_KEYS = {
+  KeyQ: 'disconnect',
+  KeyZ: 'toggleMouseLock',
+  KeyX: 'toggleFullscreen',
+  KeyS: 'toggleStats',
+}
+
 export default {
   components: {
     Navbar,
@@ -143,6 +176,8 @@ export default {
     Maximize,
     Activity,
     AlertTriangle,
+    Crosshair,
+    MousePointer2,
     MousePointerClick,
   },
   data() {
@@ -161,9 +196,12 @@ export default {
       phase: 'setup',
       error: null,
       controlling: false,
+      mouseLocked: false,
       isFullscreen: false,
       showStats: false,
       stats: {},
+      /** @type {{clientX: number, clientY: number}|null} Where to draw the local cursor, in viewport pixels. */
+      localCursor: null,
       isSecureContext: typeof window !== 'undefined' ? window.isSecureContext : true,
 
       connection: null,
@@ -184,7 +222,12 @@ export default {
   },
   async mounted() {
     document.addEventListener('fullscreenchange', this.onFullscreenChange)
+    document.addEventListener('pointerlockchange', this.onPointerLockChange)
     window.addEventListener('pagehide', this.disconnect)
+    // Registered before startControlling() ever attaches InputSender's own keydown listener, so
+    // stopImmediatePropagation() below reliably keeps a matched shortcut from also being forwarded
+    // to the host as a keystroke.
+    window.addEventListener('keydown', this.onShortcutKeydown)
 
     try {
       const [configResponse, appsResponse] = await Promise.all([apiFetch('/api/config'), apiFetch('/api/apps')])
@@ -203,7 +246,9 @@ export default {
   },
   beforeUnmount() {
     document.removeEventListener('fullscreenchange', this.onFullscreenChange)
+    document.removeEventListener('pointerlockchange', this.onPointerLockChange)
     window.removeEventListener('pagehide', this.disconnect)
+    window.removeEventListener('keydown', this.onShortcutKeydown)
     this.disconnect()
   },
   methods: {
@@ -272,16 +317,20 @@ export default {
 
       this.input = markRaw(new InputSender({
         send: (text) => this.connection?.sendInput(text),
+        sendMotion: (text) => this.connection?.sendMotion(text),
+        onAbsoluteMove: (position) => {
+          this.localCursor = position
+        },
         element: this.$refs.video,
       }))
       this.input.start()
-      this.input.lockPointer()
-
-      if (this.isFullscreen && navigator.keyboard?.lock) {
-        navigator.keyboard.lock().catch(() => {
-          // Keyboard Lock is an enhancement; streaming still works without it.
-        })
-      }
+      // Mouse movement is absolute by default, like VNC: the browser's own cursor stays visible and
+      // moving it past the edge of the video leaves it free to work with the rest of the page or the
+      // local desktop, same as any other embedded picture. Locking the pointer for raw relative motion
+      // is a deliberate, separate choice a person makes with the crosshair button, for games that need it.
+      // The video's own cursor is hidden (see .stream-hide-cursor) and this local-cursor element is
+      // drawn in its place, positioned straight from the browser's own mousemove events rather than
+      // waiting on a round trip to the host and back, which is what removes the felt lag on movement.
 
       this.statsTimer = window.setInterval(async () => {
         if (this.connection) {
@@ -306,10 +355,23 @@ export default {
       }
     },
 
-    onVideoClick() {
-      if (this.controlling) {
-        this.input?.lockPointer()
+    /**
+     * Switch between the default absolute mouse (cursor stays visible and free, like VNC) and a
+     * locked, relative one for games that need raw mouse motion rather than a screen position.
+     */
+    toggleMouseLock() {
+      if (!this.input) {
+        return
       }
+      if (document.pointerLockElement === this.$refs.video) {
+        document.exitPointerLock()
+      } else {
+        this.input.lockPointer()
+      }
+    },
+
+    onPointerLockChange() {
+      this.mouseLocked = document.pointerLockElement === this.$refs.video
     },
 
     async disconnect() {
@@ -343,9 +405,35 @@ export default {
       }
     },
 
+    toggleStats() {
+      this.showStats = !this.showStats
+    },
+
+    /**
+     * Handle a Moonlight-style Ctrl+Alt+Shift shortcut, if this keystroke is one. Real Ctrl+Alt+Shift
+     * combinations are essentially never bound to anything else at the OS or browser level, so this
+     * only needs to keep a matched one from also reaching InputSender as a keystroke to forward.
+     */
+    onShortcutKeydown(event) {
+      if (!(event.ctrlKey && event.altKey && event.shiftKey)) {
+        return
+      }
+      const action = SHORTCUT_KEYS[event.code]
+      if (!action) {
+        return
+      }
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      this[action]()
+    },
+
     onFullscreenChange() {
       this.isFullscreen = document.fullscreenElement === this.$refs.video
-      if (!this.isFullscreen) {
+      if (this.isFullscreen && this.controlling && navigator.keyboard?.lock) {
+        navigator.keyboard.lock().catch(() => {
+          // Keyboard Lock is an enhancement; streaming still works without it.
+        })
+      } else if (!this.isFullscreen) {
         navigator.keyboard?.unlock?.()
       }
     },
@@ -354,10 +442,18 @@ export default {
 </script>
 
 <style scoped>
+/* Once connecting/connected/failed, the page becomes just the stream: no navbar, no page padding,
+   filling the whole browser window rather than sitting in a small box under the normal page layout. */
+.stream-fullpage {
+  position: fixed;
+  inset: 0;
+  padding: 0;
+}
+
 .stream-view {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 100%;
   background: #000;
   overflow: hidden;
 }
@@ -368,6 +464,21 @@ export default {
   object-fit: contain;
   display: block;
   cursor: pointer;
+}
+
+/* While controlling with the mouse unlocked, the local-cursor element below stands in for the video's
+   own cursor, which is hidden here so there are never two arrows on screen at once. */
+.stream-hide-cursor .stream-video {
+  cursor: none;
+}
+
+.local-cursor {
+  position: fixed;
+  z-index: 5;
+  pointer-events: none;
+  color: #fff;
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
+  transform: translate(-2px, -2px);
 }
 
 .stream-overlay {
@@ -391,6 +502,7 @@ export default {
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
+  z-index: 10;
   display: flex;
   gap: 0.25rem;
 }
@@ -399,6 +511,7 @@ export default {
   position: absolute;
   bottom: 0.5rem;
   left: 0.5rem;
+  z-index: 10;
   background: rgba(0, 0, 0, 0.65);
   color: #0f0;
   font-family: monospace;
@@ -406,6 +519,12 @@ export default {
   padding: 0.5rem 0.75rem;
   border-radius: 0.25rem;
   line-height: 1.4;
+}
+
+.stream-shortcuts-hint {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
 }
 
 </style>

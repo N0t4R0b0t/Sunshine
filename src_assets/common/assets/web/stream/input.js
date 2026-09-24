@@ -239,6 +239,8 @@ export function gamepadStateMessage(index, pad) {
  */
 export class InputSender {
   #send
+  #sendMotion
+  #onAbsoluteMove
   #element
   #getGamepads
   #requestFrame
@@ -255,14 +257,27 @@ export class InputSender {
 
   /**
    * @param {object} options
-   * @param {(message: string) => void} options.send Delivers one JSON message to the host.
+   * @param {(message: string) => void} options.send Delivers one JSON message to the host reliably and
+   *   in order. Used for everything except mouse motion.
+   * @param {(message: string) => void} [options.sendMotion] Delivers a mouse motion message (`mr`/`ma`)
+   *   to the host. These are a continuous stream of state where a dropped update is superseded by the
+   *   next one moments later, so this should be unreliable and unordered where the transport allows it,
+   *   trading perfect delivery for not queuing a stale position behind a lost packet. Defaults to `send`.
+   * @param {(position: {clientX: number, clientY: number}|null) => void} [options.onAbsoluteMove]
+   *   Called immediately, without waiting for a network round trip, with the pointer's raw viewport
+   *   position (or `null` once it leaves the picture), so a caller can draw a local cursor - for
+   *   example with `position: fixed; left: clientX; top: clientY` - that never waits on the host. This
+   *   is deliberately not the picture-relative position sent to the host; it is what a caller needs to
+   *   place an element directly under the real cursor.
    * @param {HTMLElement} options.element The element showing the stream, which pointer events are measured against.
    * @param {() => Array<Gamepad|null>} [options.getGamepads] Reads the connected controllers.
    * @param {(callback: () => void) => any} [options.requestFrame] Schedules work for the next frame.
    * @param {(handle: any) => void} [options.cancelFrame] Cancels work scheduled with requestFrame.
    */
-  constructor({ send, element, getGamepads, requestFrame, cancelFrame }) {
+  constructor({ send, sendMotion, onAbsoluteMove, element, getGamepads, requestFrame, cancelFrame }) {
     this.#send = send
+    this.#sendMotion = sendMotion ?? send
+    this.#onAbsoluteMove = onAbsoluteMove ?? null
     this.#element = element
     this.#getGamepads = getGamepads ?? (() => (typeof navigator !== 'undefined' && navigator.getGamepads ? Array.from(navigator.getGamepads()) : []))
     this.#requestFrame = requestFrame ?? ((callback) => requestAnimationFrame(callback))
@@ -286,6 +301,10 @@ export class InputSender {
   setRelative(relative) {
     this.#flushMotion()
     this.#relative = relative
+    if (relative) {
+      // A locked pointer has no absolute position, and the browser hides the system cursor itself.
+      this.#onAbsoluteMove?.(null)
+    }
   }
 
   /**
@@ -311,6 +330,7 @@ export class InputSender {
     this.#listen(win, 'keyup', (event) => this.#onKey(event, true))
     this.#listen(win, 'blur', () => this.#releaseEverything())
     this.#listen(this.#element, 'mousemove', (event) => this.#onMouseMove(event))
+    this.#listen(this.#element, 'mouseleave', () => this.#onAbsoluteMove?.(null))
     this.#listen(this.#element, 'mousedown', (event) => this.#onMouseButton(event, true))
     this.#listen(win, 'mouseup', (event) => this.#onMouseButton(event, false))
     this.#listen(this.#element, 'wheel', (event) => this.#onWheel(event), { passive: false })
@@ -345,6 +365,7 @@ export class InputSender {
       this.#emit({ t: 'gp', n: index, m: 0 })
     }
     this.#lastGamepads.clear()
+    this.#onAbsoluteMove?.(null)
   }
 
   #listen(target, type, handler, options) {
@@ -353,7 +374,12 @@ export class InputSender {
   }
 
   #emit(message) {
-    this.#send(JSON.stringify(message))
+    const json = JSON.stringify(message)
+    if (message.t === 'mr' || message.t === 'ma') {
+      this.#sendMotion(json)
+    } else {
+      this.#send(json)
+    }
   }
 
   #onKey(event, release) {
@@ -394,6 +420,10 @@ export class InputSender {
     const position = positionInPicture(box, this.#element.videoWidth, this.#element.videoHeight, event.clientX, event.clientY)
     if (position) {
       this.#pendingPosition = position
+      // Drawing a local cursor from the raw viewport position does not wait for the network or the
+      // once-a-frame batching below, which is what makes it feel instant while the real, host-rendered
+      // one catches up.
+      this.#onAbsoluteMove?.({ clientX: event.clientX, clientY: event.clientY })
     }
   }
 
