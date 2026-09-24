@@ -838,8 +838,10 @@
     "fps": "Frame rate",
     "fullscreen": "Fullscreen",
     "insecure_context_notice": "This page was not loaded over a secure connection, so the browser will not allow mouse and keyboard capture. Accept the host's certificate and reload over https to stream.",
+    "lock_mouse": "Lock mouse for games (relative movement)",
     "reconnect": "Reconnect",
     "resolution": "Resolution",
+    "shortcuts_hint": "Ctrl+Alt+Shift+Q to quit, X for fullscreen, S for stats, Z to lock the mouse",
     "stats": "Statistics",
     "stats_audio": "Audio",
     "stats_candidate": "Connection type",
@@ -849,6 +851,7 @@
     "stats_no_audio": "none",
     "stats_resolution": "Resolution",
     "stats_rtt": "Round trip",
-    "title": "Stream"
+    "title": "Stream",
+    "unlock_mouse": "Release mouse"
   }
 }

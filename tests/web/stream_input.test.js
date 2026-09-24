@@ -357,6 +357,81 @@ describe('InputSender', () => {
     expect(messages()).toEqual([{ t: 'mr', dx: 7, dy: -1 }])
   })
 
+  it('falls back to the reliable channel for motion when no separate one is given', () => {
+    // The shared `sender` fixture only supplies `send`, so `sendMotion` defaults to it.
+    mouse('mousemove', { clientX: 10, clientY: 10 })
+    runFrame()
+    expect(messages()).toEqual([{ t: 'ma', x: 10, y: 10, w: 1000, h: 500 }])
+  })
+
+  it('sends mouse motion on a separate channel when one is given, and everything else stays on the main one', () => {
+    // A separate element and separate frame/cancel arrays, so this sender's own listeners are the only
+    // ones reacting to what it dispatches - the shared `sender` from beforeEach listens on `element` too.
+    const isolated = document.createElement('video')
+    document.body.append(isolated)
+    isolated.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 500 })
+    Object.defineProperty(isolated, 'videoWidth', { value: 1000 })
+    Object.defineProperty(isolated, 'videoHeight', { value: 500 })
+
+    const main = []
+    const motion = []
+    const isolatedFrames = []
+    const withMotion = new InputSender({
+      send: (text) => main.push(JSON.parse(text)),
+      sendMotion: (text) => motion.push(JSON.parse(text)),
+      element: isolated,
+      requestFrame: (callback) => {
+        isolatedFrames.push(callback)
+        return isolatedFrames.length
+      },
+      cancelFrame: () => {},
+    })
+    withMotion.start()
+
+    mouse('mousemove', { clientX: 400, clientY: 250 }, isolated)
+    mouse('mousedown', { button: 0 }, isolated)
+    mouse('mouseup', { button: 0 }, window)
+    isolatedFrames.splice(0).forEach((callback) => callback())
+
+    expect(motion).toEqual([{ t: 'ma', x: 400, y: 250, w: 1000, h: 500 }])
+    expect(main).toEqual([
+      { t: 'mb', b: 1, d: true },
+      { t: 'mb', b: 1, d: false },
+    ])
+
+    withMotion.stop()
+    isolated.remove()
+  })
+
+  it('sends relative motion on the separate channel too', () => {
+    const isolated = document.createElement('video')
+    document.body.append(isolated)
+    isolated.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 500 })
+
+    const motion = []
+    const isolatedFrames = []
+    const withMotion = new InputSender({
+      send: () => {},
+      sendMotion: (text) => motion.push(JSON.parse(text)),
+      element: isolated,
+      requestFrame: (callback) => {
+        isolatedFrames.push(callback)
+        return isolatedFrames.length
+      },
+      cancelFrame: () => {},
+    })
+    withMotion.start()
+    withMotion.setRelative(true)
+
+    isolated.dispatchEvent(new MouseEvent('mousemove', { movementX: 3, movementY: -2, bubbles: true }))
+    isolatedFrames.splice(0).forEach((callback) => callback())
+
+    expect(motion).toEqual([{ t: 'mr', dx: 3, dy: -2 }])
+
+    withMotion.stop()
+    isolated.remove()
+  })
+
   it('sends pending movement before switching between relative and absolute', () => {
     sender.setRelative(true)
     mouse('mousemove', { movementX: 5, movementY: 5 })
@@ -371,6 +446,82 @@ describe('InputSender', () => {
     mouse('mousemove', { clientX: 10, clientY: 250 })
     runFrame()
     expect(sent).toEqual([])
+  })
+
+  it('reports the raw viewport position immediately, without waiting for a frame', () => {
+    const isolated = document.createElement('video')
+    document.body.append(isolated)
+    isolated.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 500 })
+    Object.defineProperty(isolated, 'videoWidth', { value: 1000 })
+    Object.defineProperty(isolated, 'videoHeight', { value: 500 })
+
+    const positions = []
+    const withCallback = new InputSender({
+      send: () => {},
+      onAbsoluteMove: (position) => positions.push(position),
+      element: isolated,
+      requestFrame: () => 1,
+      cancelFrame: () => {},
+    })
+    withCallback.start()
+
+    isolated.dispatchEvent(new MouseEvent('mousemove', { clientX: 250, clientY: 125, bubbles: true }))
+    // No frame was run, yet the position is already there.
+    expect(positions).toEqual([{ clientX: 250, clientY: 125 }])
+
+    isolated.dispatchEvent(new Event('mouseleave', { bubbles: true }))
+    expect(positions.at(-1)).toBeNull()
+
+    withCallback.stop()
+    isolated.remove()
+  })
+
+  it('clears the absolute position when switching to relative movement', () => {
+    const isolated = document.createElement('video')
+    document.body.append(isolated)
+    isolated.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 500 })
+    Object.defineProperty(isolated, 'videoWidth', { value: 1000 })
+    Object.defineProperty(isolated, 'videoHeight', { value: 500 })
+
+    const positions = []
+    const withCallback = new InputSender({
+      send: () => {},
+      onAbsoluteMove: (position) => positions.push(position),
+      element: isolated,
+      requestFrame: () => 1,
+      cancelFrame: () => {},
+    })
+    withCallback.start()
+
+    isolated.dispatchEvent(new MouseEvent('mousemove', { clientX: 100, clientY: 100, bubbles: true }))
+    withCallback.setRelative(true)
+    expect(positions.at(-1)).toBeNull()
+
+    withCallback.stop()
+    isolated.remove()
+  })
+
+  it('clears the absolute position when stopped', () => {
+    const isolated = document.createElement('video')
+    document.body.append(isolated)
+    isolated.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 500 })
+    Object.defineProperty(isolated, 'videoWidth', { value: 1000 })
+    Object.defineProperty(isolated, 'videoHeight', { value: 500 })
+
+    const positions = []
+    const withCallback = new InputSender({
+      send: () => {},
+      onAbsoluteMove: (position) => positions.push(position),
+      element: isolated,
+      requestFrame: () => 1,
+      cancelFrame: () => {},
+    })
+    withCallback.start()
+    isolated.dispatchEvent(new MouseEvent('mousemove', { clientX: 5, clientY: 5, bubbles: true }))
+
+    withCallback.stop()
+    expect(positions.at(-1)).toBeNull()
+    isolated.remove()
   })
 
   it('switches to relative movement when the pointer is locked, and back when it is released', () => {
