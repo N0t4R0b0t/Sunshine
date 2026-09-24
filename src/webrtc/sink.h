@@ -19,6 +19,18 @@ namespace webrtc {
   constexpr int audio_packet_duration_ms = 20;
 
   /**
+   * @brief Video codec a browser session was negotiated to use.
+   *
+   * Matches the subset of `video::config_t::videoFormat` values (see `src/video.h`) that a browser
+   * can actually receive: 0 is H.264, 2 is AV1. HEVC (1) is not offered; real-world browser support
+   * for it over WebRTC is negligible, and there is no browser available to test it against.
+   */
+  enum class video_codec_e {
+    h264,  ///< Annex-B bitstream with in-band parameter sets on keyframes.
+    av1,  ///< Low-overhead bitstream: a sequence of length-prefixed OBUs per frame, no start codes.
+  };
+
+  /**
    * @brief Receives encoded audio and video in place of the GameStream UDP path.
    *
    * A streaming session with a sink attached does not packetize, FEC-protect, encrypt or send its
@@ -39,7 +51,8 @@ namespace webrtc {
      * The payload is only valid for the duration of the call, so implementations that keep it
      * must copy it.
      *
-     * @param payload Annex-B bitstream with in-band parameter sets on keyframes.
+     * @param payload One encoded frame, in whatever byte layout the negotiated codec uses (see
+     *                `video_codec_e`).
      * @param idr Whether this frame is a keyframe.
      * @param frame_index Encoder frame index, increasing by one per frame.
      */

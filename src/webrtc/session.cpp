@@ -24,6 +24,14 @@
 #include "src/crypto.h"
 #include "src/logging.h"
 
+// `src/video.h` declares this too, but it also pulls in FFmpeg and the platform capture backends,
+// none of which the standalone end-to-end test host (tools/webrtc-e2e) builds or links against. This
+// narrow declaration is enough for the one thing negotiation needs to know: whether the most recent
+// encoder probe found the host capable of AV1. It must stay word-for-word identical to video.h's.
+namespace video {
+  extern int active_av1_mode;
+}  // namespace video
+
 using namespace std::literals;
 
 namespace webrtc {
@@ -164,12 +172,13 @@ namespace webrtc {
     };
 
     /**
-     * @brief The H.264 codec chosen from a browser's offer.
+     * @brief The video codec chosen from a browser's offer.
      */
-    struct h264_choice_t {
+    struct video_choice_t {
       std::string mid;  ///< Media section identifier the answer must reuse.
-      int payload_type;  ///< Payload type the browser assigned to H.264.
-      std::string fmtp;  ///< The browser's own format parameters, echoed back so the profile matches.
+      video_codec_e codec;  ///< Which codec this is.
+      int payload_type;  ///< Payload type the browser assigned to this codec.
+      std::string fmtp;  ///< The browser's own format parameters, echoed back so they match what it offered.
     };
 
     /**
@@ -185,7 +194,7 @@ namespace webrtc {
      */
     struct media_offer_t {
       bool video_present = false;  ///< Whether the offer has a video section that wants to receive.
-      std::optional<h264_choice_t> h264;  ///< The H.264 codec to use, if the browser offered a usable one.
+      std::optional<video_choice_t> video;  ///< The video codec to use, if the browser offered a usable one.
       bool audio_present = false;  ///< Whether the offer has an audio section that wants to receive.
       std::optional<opus_choice_t> opus;  ///< The Opus codec to use, if the browser offered it.
     };
@@ -243,6 +252,21 @@ namespace webrtc {
     }
 
     /**
+     * @brief How much a browser's AV1 profile is preferred.
+     *
+     * Sunshine's default settings produce AV1 profile 0 (Main: 8- or 10-bit, 4:2:0), so a browser
+     * entry that asked for that is the safest to answer with; profile 1 (4:4:4) is accepted too since
+     * a NAL/OBU-level check would reject a mismatch anyway, it is just not preferred.
+     *
+     * @param fmtp Format parameters from the offer, or an empty string if the entry had none.
+     * @return Higher is better. AV1 has no equivalent of H.264's "unusable without this" cases, so
+     *         this never returns zero.
+     */
+    int av1_preference(const std::string &fmtp) {
+      return fmtp.find("profile=0") != std::string::npos ? 2 : 1;
+    }
+
+    /**
      * @brief Whether a media section is one that wants to receive from us.
      *
      * @param media The media section.
@@ -276,18 +300,37 @@ namespace webrtc {
 
         if (media->type() == "video" && !result.video_present) {
           result.video_present = true;
+          std::optional<video_choice_t> best_av1;
+          int best_av1_score = 0;
+          const bool av1_available = video::active_av1_mode >= 2;
 
           for (const int payload_type : media->payloadTypes()) {
             const auto *map = media->rtpMap(payload_type);
-            if (!map || map->format != "H264" || map->fmtps.empty()) {
+            if (!map) {
               continue;
             }
 
-            const int preference = h264_preference(map->fmtps.front());
-            if (preference > best_h264) {
-              best_h264 = preference;
-              result.h264 = h264_choice_t {media->mid(), payload_type, map->fmtps.front()};
+            if (map->format == "H264" && !map->fmtps.empty()) {
+              const int preference = h264_preference(map->fmtps.front());
+              if (preference > best_h264) {
+                best_h264 = preference;
+                result.video = video_choice_t {media->mid(), video_codec_e::h264, payload_type, map->fmtps.front()};
+              }
+            } else if (map->format == "AV1" && av1_available) {
+              const auto fmtp = map->fmtps.empty() ? std::string {} : map->fmtps.front();
+              const int preference = av1_preference(fmtp);
+              if (preference > best_av1_score) {
+                best_av1_score = preference;
+                best_av1 = video_choice_t {media->mid(), video_codec_e::av1, payload_type, fmtp};
+              }
             }
+          }
+
+          // AV1 is preferred over H.264 when the browser offered it and the host can actually encode
+          // it: better compression for the same picture, and both browsers this was tested against
+          // support it natively with no flags or licensing caveats, unlike HEVC.
+          if (best_av1) {
+            result.video = best_av1;
           }
         } else if (media->type() == "audio" && !result.audio_present) {
           result.audio_present = true;
@@ -443,8 +486,8 @@ namespace webrtc {
       rtc::Description offer {std::string {offer_sdp}, "offer"};
       const auto media = inspect_media(offer);
 
-      if (media.video_present && !media.h264) {
-        error = "Browser does not support H.264 video";
+      if (media.video_present && !media.video) {
+        error = "Browser does not support a video codec this host can send (H.264 or AV1)";
         return std::nullopt;
       }
       if (media.audio_present && !media.opus) {
@@ -529,18 +572,24 @@ namespace webrtc {
 
       // The video track has to exist before the offer is applied, so the answer can include it.
       std::shared_ptr<rtc_media_sink_t> sink;
-      if (media.h264) {
+      if (media.video) {
         std::uint32_t ssrc = 0;
         RAND_bytes(reinterpret_cast<unsigned char *>(&ssrc), sizeof(ssrc));
 
         // Reuse the browser's own format parameters so the answered profile matches what it offered.
-        rtc::Description::Video track_description {media.h264->mid, rtc::Description::Direction::SendOnly};
-        track_description.addH264Codec(media.h264->payload_type, media.h264->fmtp);
+        rtc::Description::Video track_description {media.video->mid, rtc::Description::Direction::SendOnly};
+        if (media.video->codec == video_codec_e::av1) {
+          // Unlike H.264, a browser may offer bare "AV1" with no fmtp at all.
+          const std::optional<std::string> av1_profile = media.video->fmtp.empty() ? std::nullopt : std::optional {media.video->fmtp};
+          track_description.addAV1Codec(media.video->payload_type, av1_profile);
+        } else {
+          track_description.addH264Codec(media.video->payload_type, media.video->fmtp);
+        }
         // Both tracks name the same stream, which is what lets the browser play audio and video in sync.
         track_description.addSSRC(ssrc, "sunshine", media_stream_id, "video");
 
         auto track = connection->addTrack(track_description);
-        sink = rtc_media_sink_t::create(std::move(track), static_cast<std::uint8_t>(media.h264->payload_type), ssrc);
+        sink = rtc_media_sink_t::create(std::move(track), media.video->codec, static_cast<std::uint8_t>(media.video->payload_type), ssrc);
 
         // Audio rides along with a stream, and is only added if the browser asked for it.
         if (media.opus) {
@@ -592,8 +641,13 @@ namespace webrtc {
       }
 
       if (sink) {
+        // request comes from the caller and says nothing about codecs; video_codec is what session
+        // negotiation above actually settled on, which is what the host must be told to encode.
+        stream_request_t effective_request = request;
+        effective_request.video_codec = media.video->codec;
+
         std::string start_error;
-        std::shared_ptr<stream_handle_t> stream = current_starter()(request, sink, start_error);
+        std::shared_ptr<stream_handle_t> stream = current_starter()(effective_request, sink, start_error);
         if (!stream) {
           error = start_error.empty() ? "Failed to start the stream" : start_error;
           close_session(answer.id);
@@ -619,7 +673,8 @@ namespace webrtc {
         }
       }
 
-      BOOST_LOG(info) << "WebRTC: accepted browser session "sv << answer.id << (sink ? (media.opus ? " with video and audio"sv : " with video"sv) : ""sv);
+      BOOST_LOG(info) << "WebRTC: accepted browser session "sv << answer.id
+                      << (sink ? std::string {" with "} + (media.video->codec == video_codec_e::av1 ? "AV1" : "H.264") + (media.opus ? " and audio"s : ""s) : ""s);
       return answer;
     } catch (const std::exception &e) {
       BOOST_LOG(warning) << "WebRTC: failed to accept offer: "sv << e.what();
