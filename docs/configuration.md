@@ -2121,6 +2121,30 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### file_layouts
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The file where saved display-output layouts are stored. Only used when
+            `layout_management_enabled` is turned on.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            layouts.json
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            file_layouts = layouts.json
+            @endcode</td>
+    </tr>
+</table>
+
 ## Advanced
 
 ### fec_percentage

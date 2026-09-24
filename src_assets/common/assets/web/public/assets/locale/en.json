@@ -258,6 +258,8 @@
     "ffmpeg_auto": "auto -- let ffmpeg decide (default)",
     "file_apps": "Apps File",
     "file_apps_desc": "The file where current apps of Sunshine are stored.",
+    "file_layouts": "Saved Display Layouts File",
+    "file_layouts_desc": "The file where saved display-output layouts are stored. Only used when display layout management is enabled.",
     "file_state": "State File",
     "file_state_desc": "The file where current state of Sunshine is stored",
     "fp16_sdr_gamma_encoded": "Treat FP16 SDR captures as gamma-encoded",
