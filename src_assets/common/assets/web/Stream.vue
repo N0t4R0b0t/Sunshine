@@ -53,6 +53,15 @@
               <input id="streamBitrate" type="range" class="form-range" min="2000" max="50000" step="1000" v-model.number="bitrate" />
             </div>
           </div>
+
+          <div class="mb-3">
+            <label for="streamCodec" class="form-label">{{ $t('stream.codec') }}</label>
+            <select id="streamCodec" class="form-select" v-model="videoCodec">
+              <option value="h264">{{ $t('stream.codec_h264') }}</option>
+              <option value="av1">{{ $t('stream.codec_av1') }}</option>
+            </select>
+            <div class="form-text">{{ $t('stream.codec_desc') }}</div>
+          </div>
         </div>
       </div>
 
@@ -112,6 +121,7 @@
       </div>
 
       <div v-if="showStats && phase === 'connected'" class="stream-stats">
+        <div>{{ $t('stream.stats_codec') }}: {{ stats.video?.codec || '-' }}</div>
         <div>{{ $t('stream.stats_resolution') }}: {{ stats.video?.frameWidth || 0 }}x{{ stats.video?.frameHeight || 0 }}</div>
         <div>{{ $t('stream.stats_decoded') }}: {{ stats.video?.framesDecoded || 0 }} ({{ $t('stream.stats_dropped') }} {{ stats.video?.framesDropped || 0 }})</div>
         <div>{{ $t('stream.stats_loss') }}: {{ packetLossPercent }}%</div>
@@ -190,6 +200,7 @@ export default {
       resolutionKey: '1920x1080',
       fps: 60,
       bitrate: 20000,
+      videoCodec: 'h264',
       resolutionPresets: RESOLUTION_PRESETS,
 
       /** @type {'setup'|'connecting'|'connected'|'failed'} */
@@ -295,6 +306,7 @@ export default {
           fps: this.fps,
           bitrate: this.bitrate,
           appid: this.appid,
+          codec: this.videoCodec,
         })
       } catch (e) {
         this.error = e.message

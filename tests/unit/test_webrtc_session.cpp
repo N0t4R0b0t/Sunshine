@@ -21,6 +21,7 @@
   #include <rtc/rtc.hpp>
 
   // local includes
+  #include "src/video.h"
   #include "src/webrtc/media.h"
   #include "src/webrtc/session.h"
 
@@ -34,12 +35,20 @@ namespace {
   constexpr auto baseline_profile = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"sv;
 
   /**
+   * @brief AV1 format parameters as a browser would offer them: profile 0 (Main), which is what
+   *        Sunshine's default settings produce.
+   */
+  constexpr auto av1_profile = "level-idx=5;profile=0;tier=0"sv;
+
+  /**
    * @brief What a fake browser offers to receive.
    */
   enum class video_e {
     none,  ///< Data channel only.
     h264_high_and_baseline,  ///< H.264 in both High and Baseline profiles.
     h264_baseline,  ///< H.264 in Baseline profile only.
+    av1_only,  ///< AV1 only.
+    av1_and_h264,  ///< AV1 offered ahead of H.264, as a browser preferring AV1 would.
     vp8_only,  ///< A codec Sunshine cannot send.
   };
 
@@ -94,6 +103,13 @@ namespace {
             description.addH264Codec(98, std::string {high_profile});
             break;
           case video_e::h264_baseline:
+            description.addH264Codec(96, std::string {baseline_profile});
+            break;
+          case video_e::av1_only:
+            description.addAV1Codec(97, std::string {av1_profile});
+            break;
+          case video_e::av1_and_h264:
+            description.addAV1Codec(97, std::string {av1_profile});
             description.addH264Codec(96, std::string {baseline_profile});
             break;
           default:
@@ -281,18 +297,39 @@ namespace {
    */
   const std::string annexb_delta = "\x00\x00\x00\x01\x41\x9a\x24\x6c\x42\x10\x20\x30"s;
 
+  /**
+   * @brief A minimal AV1 temporal unit, in the low-overhead bitstream format (length-prefixed OBUs,
+   *        no start codes): a one-byte sequence header OBU followed by a four-byte frame OBU.
+   */
+  const std::string av1_frame = "\x0a\x01\x00\x32\x04\x00\x00\x00\x00"s;
+
   class WebrtcSessionTest: public BaseTest {
   protected:
     void SetUp() override {
       BaseTest::SetUp();
       webrtc::close_all();
+      original_active_av1_mode_ = video::active_av1_mode;
     }
 
     void TearDown() override {
       webrtc::close_all();
       webrtc::set_stream_starter({});
+      video::active_av1_mode = original_active_av1_mode_;
       BaseTest::TearDown();
     }
+
+    /**
+     * @brief Force whether the host is treated as able to encode AV1, the way a real encoder probe
+     *        would leave it, without needing a real probe or a real AV1-capable GPU.
+     *
+     * @param capable Whether AV1 should appear available.
+     */
+    void set_av1_capable(bool capable) {
+      video::active_av1_mode = capable ? 2 : 0;
+    }
+
+  private:
+    int original_active_av1_mode_ = 0;  ///< video::active_av1_mode as it was before the test, restored after.
   };
 }  // namespace
 
@@ -448,7 +485,7 @@ TEST_F(WebrtcSessionTest, RejectsVideoOfferWithoutH264) {
 
   std::string error;
   EXPECT_FALSE(webrtc::accept_offer(offer, "", {}, error));
-  EXPECT_EQ(error, "Browser does not support H.264 video");
+  EXPECT_EQ(error, "Browser does not support a video codec this host can send (H.264 or AV1)");
   EXPECT_EQ(starter.calls, 0);
   EXPECT_EQ(webrtc::session_count(), 0u);
 }
@@ -501,6 +538,123 @@ TEST_F(WebrtcSessionTest, AnswersWithTheHighestOfferedProfile) {
   EXPECT_NE(answer->sdp.find("profile-level-id=64001f"), std::string::npos);
   EXPECT_NE(answer->sdp.find("a=rtpmap:98 H264"), std::string::npos);
   EXPECT_EQ(answer->sdp.find("a=rtpmap:96 H264"), std::string::npos);
+}
+
+TEST_F(WebrtcSessionTest, RejectsAV1WhenTheHostCannotEncodeIt) {
+  set_av1_capable(false);
+  fake_starter_t starter;
+  starter.install();
+
+  // AV1 only, so falling back to H.264 is not an option: the offer must be refused, not silently
+  // downgraded to a codec the browser never actually offered.
+  fake_browser_t browser {video_e::av1_only};
+  const auto offer = browser.make_offer();
+  ASSERT_FALSE(offer.empty());
+
+  std::string error;
+  EXPECT_FALSE(webrtc::accept_offer(offer, "", {}, error));
+  EXPECT_EQ(error, "Browser does not support a video codec this host can send (H.264 or AV1)");
+  EXPECT_EQ(starter.calls, 0);
+  EXPECT_EQ(webrtc::session_count(), 0u);
+}
+
+TEST_F(WebrtcSessionTest, AnswersWithAV1WhenTheHostCanEncodeIt) {
+  set_av1_capable(true);
+  fake_starter_t starter;
+  starter.install();
+
+  fake_browser_t browser {video_e::av1_only};
+  const auto offer = browser.make_offer();
+  ASSERT_FALSE(offer.empty());
+
+  std::string error;
+  const auto answer = webrtc::accept_offer(offer, "", {}, error);
+  ASSERT_TRUE(answer.has_value()) << error;
+
+  EXPECT_NE(answer->sdp.find("m=video"), std::string::npos);
+  EXPECT_NE(answer->sdp.find("AV1"), std::string::npos);
+  EXPECT_EQ(starter.calls, 1);
+  // video::config_t::videoFormat: 2 is AV1 (see src/video.h).
+  EXPECT_EQ(starter.request.video_codec, webrtc::video_codec_e::av1);
+}
+
+TEST_F(WebrtcSessionTest, PrefersAV1OverH264WhenTheHostCanEncodeBoth) {
+  set_av1_capable(true);
+  fake_starter_t starter;
+  starter.install();
+
+  // A browser that lists AV1 ahead of H.264, exactly as one that prefers AV1 would.
+  fake_browser_t browser {video_e::av1_and_h264};
+  const auto offer = browser.make_offer();
+  ASSERT_FALSE(offer.empty());
+
+  std::string error;
+  const auto answer = webrtc::accept_offer(offer, "", {}, error);
+  ASSERT_TRUE(answer.has_value()) << error;
+
+  EXPECT_EQ(starter.request.video_codec, webrtc::video_codec_e::av1);
+  EXPECT_NE(answer->sdp.find("a=rtpmap:97 AV1"), std::string::npos);
+  EXPECT_EQ(answer->sdp.find("a=rtpmap:96 H264"), std::string::npos);
+}
+
+TEST_F(WebrtcSessionTest, FallsBackToH264WhenAV1WasOfferedButTheHostCannotEncodeIt) {
+  set_av1_capable(false);
+  fake_starter_t starter;
+  starter.install();
+
+  fake_browser_t browser {video_e::av1_and_h264};
+  const auto offer = browser.make_offer();
+  ASSERT_FALSE(offer.empty());
+
+  std::string error;
+  const auto answer = webrtc::accept_offer(offer, "", {}, error);
+  ASSERT_TRUE(answer.has_value()) << error;
+
+  EXPECT_EQ(starter.request.video_codec, webrtc::video_codec_e::h264);
+  EXPECT_NE(answer->sdp.find("a=rtpmap:96 H264"), std::string::npos);
+  EXPECT_EQ(answer->sdp.find("AV1"), std::string::npos);
+}
+
+TEST_F(WebrtcSessionTest, DeliversAV1VideoToTheBrowserAsRtp) {
+  set_av1_capable(true);
+  fake_starter_t starter;
+  starter.install();
+
+  fake_browser_t browser {video_e::av1_only};
+  const auto offer = browser.make_offer();
+  ASSERT_FALSE(offer.empty());
+
+  std::string error;
+  const auto answer = webrtc::accept_offer(offer, "", {}, error);
+  ASSERT_TRUE(answer.has_value()) << error;
+  browser.connection->setRemoteDescription(rtc::Description {answer->sdp, "answer"});
+
+  if (!browser.wait(10s, [&] {
+        return browser.open;
+      })) {
+    GTEST_SKIP() << "Loopback WebRTC connection could not be established in this environment";
+  }
+
+  ASSERT_TRUE(browser.video_track->isOpen());
+  for (int i = 0; i < 50; ++i) {
+    starter.sink->video_frame(av1_frame, true, i);
+    {
+      std::lock_guard lg {browser.mutex};
+      if (!browser.rtp_packets.empty()) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(100ms);
+  }
+
+  std::lock_guard lg {browser.mutex};
+  ASSERT_FALSE(browser.rtp_packets.empty());
+
+  // RTP version 2, with the payload type the browser offered for AV1.
+  const auto &packet = browser.rtp_packets.front();
+  ASSERT_GE(packet.size(), 12u);
+  EXPECT_EQ(static_cast<std::uint8_t>(packet[0]) >> 6, 2);
+  EXPECT_EQ(static_cast<std::uint8_t>(packet[1]) & 0x7f, 97);
 }
 
 TEST_F(WebrtcSessionTest, StreamStartFailureFailsTheOffer) {

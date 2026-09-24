@@ -12,6 +12,27 @@
 const GATHERING_TIMEOUT_MS = 5000
 
 /**
+ * Choose which video codecs to offer.
+ *
+ * A real browser's default codec list already includes AV1 alongside H.264, and the host prefers
+ * AV1 whenever both are offered and it can actually encode AV1 (see `inspect_media()` in
+ * `src/webrtc/session.cpp`) - so offering everything unfiltered would silently switch every session
+ * on AV1-capable hardware over to it, never actually asking. H.264 is the deliberate default here for
+ * exactly that reason. Picking AV1 offers only AV1, deliberately with no H.264 fallback: a host that
+ * cannot encode it should refuse the connection with a clear reason, not silently hand back a
+ * different codec than the one that was asked for.
+ *
+ * @param {RTCRtpCodecCapability[]} allCodecs From `RTCRtpReceiver.getCapabilities('video').codecs`.
+ * @param {string} [codec] `'h264'` (the default) or `'av1'`.
+ * @returns {RTCRtpCodecCapability[]} The codecs to pass to `RTCRtpTransceiver.setCodecPreferences()`.
+ *   Empty if the browser reports none of the requested codec at all.
+ */
+export function selectVideoCodecs(allCodecs, codec) {
+  const byMime = (mime) => allCodecs.filter((entry) => entry.mimeType === mime)
+  return byMime(codec === 'av1' ? 'video/AV1' : 'video/H264')
+}
+
+/**
  * Build the JSON body for the session-open request.
  *
  * Only fields the caller actually set are included, so the host's own defaults apply to the rest
@@ -134,7 +155,8 @@ export class StreamConnection {
   /**
    * Open a session: build an offer, gather candidates, ask the host to accept it, and apply its answer.
    *
-   * @param {object} options Passed to buildSessionRequest(); see there for the fields.
+   * @param {object} options Passed to buildSessionRequest() (see there for width/height/fps/bitrate/
+   *   appid), plus `options.codec`: `'h264'` (the default) or `'av1'`, see selectVideoCodecs().
    * @returns {Promise<void>} Resolves once the answer has been applied. The connection itself may
    *   still take a moment longer to reach `connected`; watch `onConnectionStateChange` for that.
    * @throws {Error} If the host refuses the offer or the request fails, with the host's reason
@@ -149,7 +171,25 @@ export class StreamConnection {
     const pc = new RTCPeerConnection(config)
     this.pc = pc
 
-    for (const transceiver of [pc.addTransceiver('video', { direction: 'recvonly' }), pc.addTransceiver('audio', { direction: 'recvonly' })]) {
+    const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' })
+    const audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' })
+
+    if ('setCodecPreferences' in videoTransceiver && typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+      const codecs = selectVideoCodecs(RTCRtpReceiver.getCapabilities('video').codecs, options.codec)
+      if (codecs.length > 0) {
+        videoTransceiver.setCodecPreferences(codecs)
+      } else if (options.codec) {
+        // A specific codec was asked for and this browser has none of it. Refuse here, locally and
+        // immediately, rather than send an offer that would fall through to whatever the browser's
+        // unrestricted default happens to include - which could quietly end up as a different codec
+        // than the one that was actually requested.
+        pc.close()
+        this.pc = null
+        throw new Error(`This browser cannot receive ${options.codec.toUpperCase()} video`)
+      }
+    }
+
+    for (const transceiver of [videoTransceiver, audioTransceiver]) {
       // Ask Chrome to play out frames as soon as they arrive rather than holding a buffer to smooth
       // over jitter, which is the right trade for a host on the same network. Firefox has no
       // equivalent yet, so it keeps its default buffering.

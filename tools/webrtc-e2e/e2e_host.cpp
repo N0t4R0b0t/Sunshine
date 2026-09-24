@@ -503,6 +503,14 @@ namespace crypto {
   }
 }  // namespace crypto
 
+namespace video {
+  // src/webrtc/session.cpp forward-declares this (see its own comment) rather than including
+  // src/video.h, since this host does not link video.cpp. Defaulting to 0 matches the real global's
+  // value before any encoder probe has run, so every existing scenario here, none of which offers
+  // AV1, is unaffected; this host never encodes real AV1, so nothing here has a reason to raise it.
+  int active_av1_mode = 0;
+}  // namespace video
+
 namespace webrtc {
   // The real starter drives a live Sunshine. This host always installs its own, so this is never reached.
   std::unique_ptr<stream_handle_t> start_host_stream(const stream_request_t &, std::shared_ptr<media_sink_t>, std::string &error) {

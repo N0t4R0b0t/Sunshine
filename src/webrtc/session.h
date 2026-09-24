@@ -36,6 +36,7 @@ namespace webrtc {
     int fps = 60;  ///< Requested frame rate.
     int bitrate_kbps = 20000;  ///< Requested video bitrate in kilobits per second.
     int appid = 0;  ///< Application to launch; zero or less streams the desktop as it is.
+    video_codec_e video_codec = video_codec_e::h264;  ///< Codec negotiation settled on; not something a caller sets directly.
   };
 
   /**

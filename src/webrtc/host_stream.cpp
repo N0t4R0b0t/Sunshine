@@ -127,8 +127,9 @@ namespace webrtc {
     /**
      * @brief Build the stream configuration for a browser session.
      *
-     * @param request What the browser wants to stream.
-     * @return Stream configuration. H.264, 8-bit 4:2:0, since that is what browsers decode everywhere.
+     * @param request What the browser wants to stream, including which codec session negotiation
+     *                settled on.
+     * @return Stream configuration. 8-bit 4:2:0, since that is what browsers decode everywhere.
      */
     stream::config_t make_stream_config(const stream_request_t &request) {
       stream::config_t config {};
@@ -145,7 +146,8 @@ namespace webrtc {
       config.monitor.slicesPerFrame = 1;
       config.monitor.numRefFrames = 0;
       config.monitor.encoderCscMode = csc_rec709_limited;
-      config.monitor.videoFormat = 0;
+      // video::config_t::videoFormat: 0 H.264, 1 HEVC (never negotiated by a browser session), 2 AV1.
+      config.monitor.videoFormat = request.video_codec == video_codec_e::av1 ? 2 : 0;
       config.monitor.dynamicRange = 0;
       config.monitor.chromaSamplingType = 0;
       config.monitor.enableIntraRefresh = 0;
