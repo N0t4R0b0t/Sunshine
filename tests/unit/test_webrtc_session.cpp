@@ -13,6 +13,8 @@
   #include <cstdint>
   #include <memory>
   #include <mutex>
+  #include <regex>
+  #include <set>
   #include <string>
   #include <thread>
   #include <vector>
@@ -302,6 +304,21 @@ namespace {
    *        no start codes): a one-byte sequence header OBU followed by a four-byte frame OBU.
    */
   const std::string av1_frame = "\x0a\x01\x00\x32\x04\x00\x00\x00\x00"s;
+
+  /**
+   * @brief Collect the UDP ports advertised by an SDP answer's `a=candidate` lines.
+   *
+   * @param sdp The SDP to scan.
+   * @return Every distinct port found; empty if the SDP has no candidates.
+   */
+  std::set<int> candidate_ports(const std::string &sdp) {
+    static const std::regex candidate_pattern {R"(a=candidate:\S+ \d+ UDP \d+ \S+ (\d+) typ)"};
+    std::set<int> ports;
+    for (auto it = std::sregex_iterator(sdp.begin(), sdp.end(), candidate_pattern); it != std::sregex_iterator(); ++it) {
+      ports.insert(std::stoi((*it)[1].str()));
+    }
+    return ports;
+  }
 
   class WebrtcSessionTest: public BaseTest {
   protected:
@@ -1016,6 +1033,53 @@ TEST_F(WebrtcSessionTest, InputWithNoStreamIsDroppedQuietly) {
   }));
   EXPECT_EQ(starter.calls, 0);
   EXPECT_EQ(webrtc::session_count(), 1u);
+}
+
+TEST_F(WebrtcSessionTest, MuxesAllSessionsOntoOneFixedPortWhenConfigured) {
+  // A high, unassigned-range port, chosen so this test does not collide with anything else bound
+  // on the machine running it.
+  constexpr int media_port = 58231;
+
+  fake_browser_t first;
+  fake_browser_t second;
+  const auto first_offer = first.make_offer();
+  const auto second_offer = second.make_offer();
+  ASSERT_FALSE(first_offer.empty());
+  ASSERT_FALSE(second_offer.empty());
+
+  std::string error;
+  const auto a = webrtc::accept_offer(first_offer, "", {}, error, media_port);
+  const auto b = webrtc::accept_offer(second_offer, "", {}, error, media_port);
+  ASSERT_TRUE(a.has_value()) << error;
+  ASSERT_TRUE(b.has_value()) << error;
+
+  const auto ports_a = candidate_ports(a->sdp);
+  const auto ports_b = candidate_ports(b->sdp);
+  ASSERT_FALSE(ports_a.empty());
+  ASSERT_FALSE(ports_b.empty());
+  EXPECT_EQ(ports_a, std::set<int> {media_port});
+  EXPECT_EQ(ports_b, std::set<int> {media_port});
+}
+
+TEST_F(WebrtcSessionTest, WithoutAFixedPortEachSessionGetsItsOwnPort) {
+  fake_browser_t first;
+  fake_browser_t second;
+  const auto first_offer = first.make_offer();
+  const auto second_offer = second.make_offer();
+  ASSERT_FALSE(first_offer.empty());
+  ASSERT_FALSE(second_offer.empty());
+
+  std::string error;
+  const auto a = webrtc::accept_offer(first_offer, "", {}, error);
+  const auto b = webrtc::accept_offer(second_offer, "", {}, error);
+  ASSERT_TRUE(a.has_value()) << error;
+  ASSERT_TRUE(b.has_value()) << error;
+
+  const auto ports_a = candidate_ports(a->sdp);
+  const auto ports_b = candidate_ports(b->sdp);
+  ASSERT_FALSE(ports_a.empty());
+  ASSERT_FALSE(ports_b.empty());
+  EXPECT_NE(*ports_a.begin(), *ports_b.begin());
 }
 
 #endif  // SUNSHINE_BUILD_WEBRTC

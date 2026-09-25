@@ -1227,6 +1227,35 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### webrtc_media_port
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Pins every browser streaming session's media (video, audio, and the
+            input data channels) to this one fixed UDP port instead of a separate,
+            unpredictable port per session. This is what makes the browser client
+            forwardable through a reverse proxy or firewall with a single rule:
+            without it, each session's media rides an ephemeral port chosen at
+            connect time.
+            @note{Has no effect unless `webrtc_enabled` is turned on.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            webrtc_media_port = 48000
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_configuration_option
 
 <table>

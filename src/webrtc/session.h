@@ -127,9 +127,12 @@ namespace webrtc {
    * @param stun_server Optional STUN server URL (for example `stun:host:19302`). Empty means host candidates only.
    * @param request What to stream, used when the offer contains video.
    * @param error Receives a human readable reason when no answer is produced.
+   * @param media_port Fixed UDP port to pin and mux this and every other session's media on, so the
+   *   whole feature is forwardable through a single port; 0 (the default) leaves libdatachannel's own
+   *   ephemeral-port-per-session behavior in place.
    * @return The answer, or `std::nullopt` on failure, in which case `error` is set.
    */
-  std::optional<answer_t> accept_offer(std::string_view offer_sdp, const std::string &stun_server, const stream_request_t &request, std::string &error);
+  std::optional<answer_t> accept_offer(std::string_view offer_sdp, const std::string &stun_server, const stream_request_t &request, std::string &error, int media_port = 0);
 
   /**
    * @brief Close and forget a session.

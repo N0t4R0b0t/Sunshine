@@ -3031,7 +3031,7 @@ namespace confighttp {
       stream_request.appid = input_tree.value("appid", stream_request.appid);
 
       std::string error;
-      const auto answer = webrtc::accept_offer(sdp, config::sunshine.webrtc_stun_server, stream_request, error);
+      const auto answer = webrtc::accept_offer(sdp, config::sunshine.webrtc_stun_server, stream_request, error, config::sunshine.webrtc_media_port);
       if (!answer) {
         bad_request(response, request, error);
         return;
