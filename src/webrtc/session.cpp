@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -459,7 +460,7 @@ namespace webrtc {
     starter_override = std::move(starter);
   }
 
-  std::optional<answer_t> accept_offer(std::string_view offer_sdp, const std::string &stun_server, const stream_request_t &request, std::string &error) {
+  std::optional<answer_t> accept_offer(std::string_view offer_sdp, const std::string &stun_server, const stream_request_t &request, std::string &error, int media_port) {
     if (offer_sdp.empty()) {
       error = "Empty SDP offer";
       return std::nullopt;
@@ -505,6 +506,13 @@ namespace webrtc {
           error = "The host's STUN server setting is invalid";
           return std::nullopt;
         }
+      }
+      if (media_port > 0 && media_port <= std::numeric_limits<std::uint16_t>::max()) {
+        // enableIceUdpMux multiplexes every session's media (RTP and data channels) onto one shared
+        // UDP socket instead of libdatachannel's default of a fresh ephemeral port per session, so a
+        // reverse proxy or firewall only ever needs one fixed UDP rule for the whole feature.
+        config.enableIceUdpMux = true;
+        config.portRangeBegin = config.portRangeEnd = static_cast<std::uint16_t>(media_port);
       }
 
       connection = std::make_shared<rtc::PeerConnection>(config);
