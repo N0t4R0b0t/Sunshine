@@ -1781,6 +1781,9 @@ namespace config {
     bool_f(vars, "webrtc_enabled", config::sunshine.webrtc_enabled);
     string_f(vars, "webrtc_stun_server", config::sunshine.webrtc_stun_server);
 
+    sunshine.webrtc_media_port = 0;
+    int_between_f(vars, "webrtc_media_port", config::sunshine.webrtc_media_port, {0, 65535});
+
     string_f(vars, "external_ip", nvhttp.external_ip);
     list_prep_cmd_f(vars, "global_prep_cmd", config::sunshine.prep_cmds);
 

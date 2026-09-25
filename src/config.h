@@ -418,6 +418,12 @@ namespace config {
     // of the host's desktop from a browser.
     bool webrtc_enabled;  ///< Whether the browser streaming client is served and accepts sessions.
     std::string webrtc_stun_server;  ///< Optional STUN server for the browser client; empty means host candidates only.
+
+    // Opt-in: pin every browser session's media (RTP audio/video and data channels) to one fixed,
+    // shared UDP port instead of libdatachannel's default of one ephemeral port per session. This
+    // is what makes the feature forwardable through a reverse proxy or firewall with a single rule,
+    // at the cost of every concurrent session's media multiplexing through that one socket.
+    int webrtc_media_port;  ///< UDP port to pin and mux all browser sessions' media on; 0 means an ephemeral port per session (libdatachannel's default).
   };
 
   extern video_t video;

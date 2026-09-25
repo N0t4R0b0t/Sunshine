@@ -390,6 +390,8 @@
     "webrtc_enabled_desc": "Serves a browser-based Moonlight client from this web UI, so you can stream this host from a browser without installing anything. Anyone who can sign in to this web UI will be able to see and control the desktop, so leave this off unless you want that. Requires a secure connection: your browser must have accepted Sunshine's certificate before mouse and keyboard capture will work.",
     "webrtc_stun_server": "STUN server for the browser client",
     "webrtc_stun_server_desc": "Only needed when the browser cannot reach this host directly, such as across separate networks. Leave empty for normal use on the same network. Example: stun:stun.l.google.com:19302",
+    "webrtc_media_port": "Fixed media port",
+    "webrtc_media_port_desc": "Pin every browser session's audio, video and input traffic to this one UDP port instead of a different port per session. Useful when forwarding the browser client through a reverse proxy or firewall, since only this one port needs a rule instead of an unpredictable range. Leave at 0 for a separate port per session (the default).",
     "display_layouts": "Display Layouts",
     "display_layouts_desc": "Drag monitors below to reposition them, then Apply Now or save the arrangement as a named layout to reapply later. Currently supported on X11 and KWin (Plasma) Wayland sessions only.",
     "display_layouts_empty": "No saved layouts yet.",
