@@ -319,10 +319,13 @@ namespace kwin {
     /**
      * @brief Connect to KWin wayland, enumerate outputs.
      * @param setup_permissions - Try to setup KWin permissions (default: true)
+     * @param require_screencast - Fail when zkde_screencast_unstable_v1 is not bound (default: true).
+     *        Callers that only probe for KWin itself pass false, because the screencast protocol is
+     *        privileged and is only exposed once the permission desktop file has been picked up.
      * @return 0 on success, -1 on failure. On success, node_id and
      *         output width/height/x/y are populated.
      */
-    int init(const bool setup_permissions = true) {
+    int init(const bool setup_permissions = true, const bool require_screencast = true) {
       if (setup_permissions) {
         // Try to set up permissions for zkde_screencast_unstable_v1
         screencast_permission_helper_t::setup();
@@ -347,7 +350,7 @@ namespace kwin {
       // We need a second roundtrip after binding outputs to get wl_output events
       wl_display_roundtrip(wl_display);
 
-      if (!is_kwin_screencasting_available()) {
+      if (require_screencast && !is_kwin_screencasting_available()) {
         BOOST_LOG(debug) << "[kwingrab] zkde_screencast_unstable_v1 not found in registry."sv;
         return -1;
       }
@@ -1439,13 +1442,17 @@ namespace platf {
   }
 
   /**
-   * @brief Check whether KWin screencast capture is available.
+   * @brief Check whether the compositor is KWin.
    *
-   * @return True when KWin capture support is available.
+   * Does not require the privileged screencast protocol, so it also holds when another backend (such as KMS) captures.
+   *
+   * @return True when KWin is detected.
    */
   bool kwin_available() {
-    // Init screencast without permission setup (to not cause unneeded logs / temporary desktop files) and check KWin availability
-    if (const auto screencast = std::make_unique<kwin::screencast_t>(); screencast->init(false) < 0 || !screencast->kwin_available()) {
+    // Init screencast without permission setup (to not cause unneeded logs / temporary desktop files) and check KWin availability.
+    // The screencast protocol is not required here: layout management only needs to know that KWin is running, and with KMS
+    // capture nothing has set up the screencast permission.
+    if (const auto screencast = std::make_unique<kwin::screencast_t>(); screencast->init(false, false) < 0 || !screencast->kwin_available()) {
       return false;
     }
     return true;
