@@ -1378,6 +1378,7 @@ namespace platf {
 #endif
 
 #ifdef SUNSHINE_BUILD_KWIN
+  bool kwin_available();
   std::vector<std::string> kwin_display_names();
   std::shared_ptr<display_t> kwin_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
   std::vector<platf::display_output_t> kwin_enum_outputs();
