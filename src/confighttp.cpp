@@ -3017,7 +3017,7 @@ namespace confighttp {
     try {
       const nlohmann::json input_tree = nlohmann::json::parse(ss);
       if (input_tree.value("type", "") != "offer") {
-        bad_request(response, request, "Expected an SDP offer");
+        bad_request(response, "Expected an SDP offer");
         return;
       }
       const auto sdp = input_tree.value("sdp", "");
@@ -3033,7 +3033,7 @@ namespace confighttp {
       std::string error;
       const auto answer = webrtc::accept_offer(sdp, config::sunshine.webrtc_stun_server, stream_request, error, config::sunshine.webrtc_media_port);
       if (!answer) {
-        bad_request(response, request, error);
+        bad_request(response, error);
         return;
       }
 
@@ -3045,7 +3045,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "CreateWebrtcSession: "sv << e.what();
-      bad_request(response, request, "Invalid request");
+      bad_request(response, "Invalid request");
     }
   }
 
@@ -3070,7 +3070,7 @@ namespace confighttp {
     print_req(request);
 
     if (!webrtc::close_session(request->path_match[1])) {
-      not_found(response, request, "No such browser session");
+      not_found(response, "No such browser session");
       return;
     }
 
