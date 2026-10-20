@@ -86,16 +86,23 @@ jobs:
       - name: Fix workspace permissions
         run: chown -R builder:builder "${GITHUB_WORKSPACE}"
 
-      - name: Derive version from commit timestamp
+      - name: Derive version
         id: version
+        env:
+          TAG: ${{ steps.ref.outputs.tag }}
         run: |
-          # Matches upstream's calendar-versioning scheme (vYYYY.M{D}D.HHMMSS, UTC, from the
-          # commit's committer date) instead of the tag text, so pkgver reflects when the
-          # published commit actually landed rather than an arbitrary tag name.
+          # A tag shaped like upstream's release plus a fork suffix (v2026.1018.5342-extra1) maps to
+          # pkgver 2026.1018.5342.extra1, which sorts above that upstream release and below the next
+          # one. Any other tag falls back to upstream's calendar-versioning scheme (vYYYY.M{D}D.HHMMSS,
+          # UTC, from the commit's committer date) so pkgver still reflects when the commit landed.
           # Workspace was just chown'd to builder above, so root (running this step) needs an
           # explicit safe.directory exception to run git commands here.
-          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-          pkgver="$(TZ=UTC git log -1 --date='format-local:%Y.%-m%d.%H%M%S' --format=%cd HEAD)"
+          if [[ "${TAG}" =~ ^v(20[0-9]{2}\.[0-9]+\.[0-9]+)-([A-Za-z0-9]+)$ ]]; then
+            pkgver="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          else
+            git config --global --add safe.directory "${GITHUB_WORKSPACE}"
+            pkgver="$(TZ=UTC git log -1 --date='format-local:%Y.%-m%d.%H%M%S' --format=%cd HEAD)"
+          fi
           echo "Derived pkgver: ${pkgver}"
           echo "pkgver=${pkgver}" >> "${GITHUB_OUTPUT}"
 
