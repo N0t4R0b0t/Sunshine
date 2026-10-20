@@ -1449,7 +1449,7 @@ namespace confighttp {
       nlohmann::json input_tree = nlohmann::json::parse(ss);
       std::string name = input_tree.at("name").get<std::string>();
       if (name.empty()) {
-        bad_request(response, request, "Layout name must not be empty");
+        bad_request(response, "Layout name must not be empty");
         return;
       }
 
@@ -1481,7 +1481,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SaveDisplayLayout: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
@@ -1536,7 +1536,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "DeleteDisplayLayout: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
@@ -1598,7 +1598,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "ApplyDisplayLayout: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
@@ -1653,7 +1653,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "ApplyDisplayOutputs: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
@@ -1699,7 +1699,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SetRestoreDisplayLayout: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
@@ -1745,7 +1745,7 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SetStreamingDisplayLayout: "sv << e.what();
-      bad_request(response, request, e.what());
+      bad_request(response, e.what());
     }
   }
 
