@@ -1,0 +1,24 @@
+---
+name: Windows Build
+
+permissions: {}
+
+# Fork-only: builds just the Windows artifacts (without the rest of the ci.yml matrix) so a
+# Windows installer can be produced on demand. Runs on a push to this branch (which also lets
+# GitHub index the workflow) or manually via workflow_dispatch.
+on:
+  push:
+    branches:
+      - ci/windows-dispatch
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci-windows.yml
+    with:
+      publish_release: 'false'
+      release_commit: ${{ github.sha }}
+      release_version: 0.0.0
