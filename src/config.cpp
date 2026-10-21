@@ -914,6 +914,9 @@ namespace config {
     {},  // prep commands
     {},  // csrf_allowed_origins
     false,  // layout_management_enabled
+    false,  // webrtc_enabled
+    {},  // webrtc_stun_server
+    0,  // webrtc_media_port
   };
 
   /**
