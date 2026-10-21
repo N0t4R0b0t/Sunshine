@@ -7,7 +7,7 @@
 : "${_use_cuda:=detect}" # nvenc
 : "${_build_jobs:=4}"  # cap on parallel compile/link jobs; override via MAKEFLAGS or this var on constrained builders
 
-: "${_commit:=9775c6328f6f5f8a90c4ea5794a2e0ef23e78c4f}"
+: "${_commit:=01bb5edb163018572bf5f2870427620bef7c3c32}"
 
 pkgname='sunshine'
 pkgver=2026.1018.5342.extra2

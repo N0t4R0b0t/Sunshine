@@ -50,7 +50,7 @@ pkgbase = sunshine
 	depends = vulkan-icd-loader
 	depends = which
 	optdepends = libva-mesa-driver: AMD GPU encoding support
-	source = sunshine::git+https://github.com/N0t4R0b0t/Sunshine.git#commit=9775c6328f6f5f8a90c4ea5794a2e0ef23e78c4f
+	source = sunshine::git+https://github.com/N0t4R0b0t/Sunshine.git#commit=01bb5edb163018572bf5f2870427620bef7c3c32
 	sha256sums = SKIP
 
 pkgname = sunshine
