@@ -913,6 +913,7 @@ namespace config {
     true,  // system_tray
     {},  // prep commands
     {},  // csrf_allowed_origins
+    false,  // layout_management_enabled
   };
 
   /**

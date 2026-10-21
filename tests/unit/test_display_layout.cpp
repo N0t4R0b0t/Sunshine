@@ -4,6 +4,10 @@
  */
 #include "../tests_common.h"
 
+// standard includes
+#include <filesystem>
+
+// local includes
 #include <src/config.h>
 #include <src/display_layout.h>
 
@@ -24,16 +28,33 @@ namespace {
   }
 }  // namespace
 
+/**
+ * @brief Fixture that keeps the saved-layouts file in a private temporary directory.
+ *
+ * The app data directory is not guaranteed to exist on a fresh machine (a CI runner has none),
+ * and writing there would clobber a developer's real layouts file.
+ */
 class DisplayLayoutTest: public BaseTest {
 protected:
   void SetUp() override {
     BaseTest::SetUp();
-    config::sunshine.file_layouts = platf::appdata().string() + "/test_layouts.json";
+    test_dir = std::filesystem::temp_directory_path() / "sunshine_display_layout_tests";
+    std::filesystem::remove_all(test_dir);
+    std::filesystem::create_directories(test_dir);
+    config::sunshine.file_layouts = (test_dir / "test_layouts.json").string();
   }
+
+  void TearDown() override {
+    std::error_code ec;
+    std::filesystem::remove_all(test_dir, ec);
+    BaseTest::TearDown();
+  }
+
+  std::filesystem::path test_dir;  ///< Temporary directory holding this test's layouts file.
 };
 
 TEST_F(DisplayLayoutTest, LoadMissingFileReturnsEmpty) {
-  config::sunshine.file_layouts = platf::appdata().string() + "/nonexistent_layouts.json";
+  config::sunshine.file_layouts = (test_dir / "nonexistent_layouts.json").string();
   auto layouts = display_layout::load_layouts();
   EXPECT_TRUE(layouts.empty());
 }
