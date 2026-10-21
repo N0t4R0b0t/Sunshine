@@ -8,6 +8,11 @@ permissions: {}
 # source itself, pinned via `_commit`/`pkgver` to the exact tag/commit it was generated from, so
 # an external mirror (e.g. mtune-mirror) can fetch it from a stable URL and build it there.
 #
+# The same three files are also committed to the `pkgbuild` branch of this repository. A mirror
+# that tracks a git ref (mtune-mirror's source=git) can then notice a new version by itself,
+# because the branch moves whenever a tag is published, instead of someone pasting the PKGBUILD
+# into the mirror by hand.
+#
 # Does not affect the normal CI pipeline (ci.yml and friends) in any way.
 on:
   push:
@@ -29,7 +34,7 @@ jobs:
     container:
       image: archlinux/archlinux:base-devel
     permissions:
-      contents: read
+      contents: write  # pushes the generated files to the pkgbuild branch
     env:
       R2_BUCKET: ${{ vars.R2_BUCKET }}
       R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
@@ -144,6 +149,39 @@ jobs:
           aws s3 cp pkg/.SRCINFO "s3://${R2_BUCKET}/aur/.SRCINFO" --endpoint-url "${R2_ENDPOINT}"
           aws s3 cp pkg/sunshine.install "s3://${R2_BUCKET}/aur/sunshine.install" --endpoint-url "${R2_ENDPOINT}"
 
+      - name: Publish to the pkgbuild branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          git config --global --add safe.directory '*'
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          url="https://github.com/${REPOSITORY}.git"
+
+          # A separate repository keeps this branch to just the three files, with no link to the
+          # source history, so it can be cloned quickly and a mirror's checkout stays tiny.
+          work="$(mktemp -d)"
+          git init -q "${work}"
+          cd "${work}"
+          if git -c "http.https://github.com/.extraheader=${auth}" fetch -q --depth 1 "${url}" pkgbuild; then
+            git checkout -q -B pkgbuild FETCH_HEAD
+          else
+            git checkout -q --orphan pkgbuild
+          fi
+
+          cp "${GITHUB_WORKSPACE}/pkg/PKGBUILD" "${GITHUB_WORKSPACE}/pkg/.SRCINFO" "${GITHUB_WORKSPACE}/pkg/sunshine.install" .
+          git add PKGBUILD .SRCINFO sunshine.install
+          if git diff --cached --quiet; then
+            echo "pkgbuild branch already matches ${TAG}, nothing to commit"
+            exit 0
+          fi
+          git commit -q -m "PKGBUILD for ${TAG}"
+          git -c "http.https://github.com/.extraheader=${auth}" push -q "${url}" pkgbuild
+
       - name: Summary
         env:
           TAG: ${{ steps.ref.outputs.tag }}
@@ -156,3 +194,5 @@ jobs:
           echo "- PKGBUILD" >> "${GITHUB_STEP_SUMMARY}"
           echo "- .SRCINFO" >> "${GITHUB_STEP_SUMMARY}"
           echo "- sunshine.install" >> "${GITHUB_STEP_SUMMARY}"
+          echo "" >> "${GITHUB_STEP_SUMMARY}"
+          echo "Also committed to the \`pkgbuild\` branch for git-tracking mirrors." >> "${GITHUB_STEP_SUMMARY}"
